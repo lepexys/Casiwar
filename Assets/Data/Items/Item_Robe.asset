@@ -1,0 +1,21 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 294cfee48442073439465c419eb07e72, type: 3}
+  m_Name: Item_Robe
+  m_EditorClassIdentifier: 
+  itemName: "\u0420\u044F\u0441\u0430"
+  slot: 0
+  unitClass: 3
+  icon: {fileID: 0}
+  shortLabel: "\u0420\u042F\u0421\u0410"
+  armor: 12
+  attack: 0
