@@ -15,6 +15,8 @@ namespace Casiwar
     /// • Ход: клик по фишке → клик по соседней, либо свайп. Фишки меняются местами ВСЕГДА, даже если линия
     ///   не сложилась, — так линию можно подготовить за несколько перестановок. Каждая перестановка тратит
     ///   одно действие (каскады — бесплатно).
+    /// • Когда символов мало и на поле есть пустые клетки, фишку можно сдвинуть вбок в пустую клетку
+    ///   (тоже одно действие): она падает вниз, а фишки, что стояли над ней, опускаются.
     /// • Каскады: собранные фишки лопаются, оставшиеся падают, сверху досыпаются символы из ЗАПАСА.
     ///   Запас кончился — сверху больше ничего не падает, на поле остаются пустые клетки.
     /// • Ходы на поле не гарантируются (кроме стартового расклада), поле само не обновляется. Одним ходом сложить
@@ -61,6 +63,7 @@ namespace Casiwar
         private bool autoPlay;
         private bool exhausted;
         private int pendingSize;
+        private bool pendingReroll;
         private float nextAutoMoveTime;
         private readonly List<TileView> hintedViews = new List<TileView>();
 
@@ -129,6 +132,7 @@ namespace Casiwar
             exhausted = false;
             ExhaustReason = string.Empty;
             pendingSize = 0;
+            pendingReroll = false;
             selected = null;
             Reserve = Mathf.Max(0, reserve);
             ActionsLeft = Mathf.Max(0, actions);
@@ -181,6 +185,36 @@ namespace Casiwar
             if (grid == null || newSize <= size) return;
             if (busy) pendingSize = Mathf.Max(pendingSize, newSize);
             else ResizeNow(newSize);
+        }
+
+        /// <summary>
+        /// Перекатить фишки на поле: каждая занятая клетка получает новый случайный символ (пустые остаются пустыми,
+        /// запас и ходы не тратятся). Например, открылся новый класс — его юниты сразу видны. Во время каскада — после него.
+        /// </summary>
+        public void RerollTiles()
+        {
+            if (grid == null || !inputEnabled) return;
+            if (busy) pendingReroll = true;
+            else RerollNow();
+        }
+
+        private void RerollNow()
+        {
+            pendingReroll = false;
+            SetSelected(null);
+            ClearHint();
+            for (int x = 0; x < size; x++)
+            {
+                for (int y = 0; y < size; y++)
+                {
+                    if (grid[x, y] != null) grid[x, y] = CreateRandomTile();
+                }
+            }
+            StabilizeSilently();
+            if (ActionsLeft > 0) exhausted = false; // «сложить нечего» могло кончиться — поле проверится заново
+            RefreshAllViews(dropIn: true);
+            StartCoroutine(SettleRoutine());
+            UpdateUi();
         }
 
         /// <summary>Режим «Авто»: поле само делает лучшие ходы (с учётом приоритета).</summary>
@@ -258,11 +292,12 @@ namespace Casiwar
 
         public void OnTileClicked(Vector2Int cell)
         {
-            if (!CanAcceptInput || autoPlay || grid[cell.x, cell.y] == null) return;
+            if (!CanAcceptInput || autoPlay) return;
+            bool empty = grid[cell.x, cell.y] == null;
 
             if (selected == null)
             {
-                SetSelected(cell);
+                if (!empty) SetSelected(cell);
                 return;
             }
 
@@ -271,14 +306,15 @@ namespace Casiwar
             {
                 SetSelected(null);
             }
-            else if (AreNeighbors(previous, cell))
+            else if (AreNeighbors(previous, cell) && MatchRules.IsMove(grid, previous, cell))
             {
+                // Обмен с соседней фишкой или сдвиг в соседнюю пустую клетку
                 SetSelected(null);
                 StartCoroutine(SwapRoutine(previous, cell));
             }
             else
             {
-                SetSelected(cell);
+                SetSelected(empty ? (Vector2Int?)null : cell);
             }
         }
 
@@ -286,7 +322,7 @@ namespace Casiwar
         {
             if (!CanAcceptInput || autoPlay) return;
             Vector2Int other = cell + direction;
-            if (!MatchRules.InBounds(grid, other) || grid[cell.x, cell.y] == null || grid[other.x, other.y] == null) return;
+            if (grid[cell.x, cell.y] == null || !MatchRules.IsMove(grid, cell, other)) return;
             SetSelected(null);
             StartCoroutine(SwapRoutine(cell, other));
         }
@@ -299,7 +335,14 @@ namespace Casiwar
         {
             busy = true;
             ClearHint();
+            bool slide = MatchRules.IsSlide(grid, a, b);
             yield return AnimateSwap(a, b);
+            if (slide)
+            {
+                // Сдвиг в пустую клетку: фишка падает вниз, фишки над её старым местом опускаются
+                ApplyGravityAndRefill();
+                yield return WaitForViews();
+            }
 
             // Перестановка остаётся, даже если линия не сложилась: так линию готовят за несколько ходов
             ActionsLeft = Mathf.Max(0, ActionsLeft - 1);
@@ -402,6 +445,10 @@ namespace Casiwar
                 int newSize = pendingSize;
                 pendingSize = 0;
                 ResizeNow(newSize);
+            }
+            else if (pendingReroll)
+            {
+                RerollNow();
             }
             else if (Reserve > 0 && HasHoles())
             {
@@ -609,20 +656,7 @@ namespace Casiwar
         /// <summary>Гравитация без досыпания: пустые клетки уходят наверх.</summary>
         private void CompactColumns()
         {
-            for (int x = 0; x < size; x++)
-            {
-                int write = size - 1;
-                for (int y = size - 1; y >= 0; y--)
-                {
-                    if (grid[x, y] == null) continue;
-                    if (y != write)
-                    {
-                        grid[x, write] = grid[x, y];
-                        grid[x, y] = null;
-                    }
-                    write--;
-                }
-            }
+            for (int x = 0; x < size; x++) MatchRules.DropColumn(grid, x);
         }
 
         /// <summary>Убрать готовые линии без наград и гарантировать ход (для стартового поля и роста поля).</summary>

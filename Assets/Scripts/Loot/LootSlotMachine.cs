@@ -153,6 +153,7 @@ namespace Casiwar
         private TileView[,] views;
         private RectTransform linesRoot;
         private float step;
+        private Vector2 lastContainerSize;
         private bool autoSpin;
         private readonly List<string> log = new List<string>();
 
@@ -174,6 +175,12 @@ namespace Casiwar
 
         private void Update()
         {
+            // Окно поменяло размер (или раскладку) — переставляем барабаны; линии выигрыша сбрасываем
+            if (views != null && !IsSpinning && gridContainer != null && gridContainer.rect.size != lastContainerSize)
+            {
+                LayoutViews();
+                ClearPaylines();
+            }
             if (autoSpin && !IsSpinning && SpinsLeft > 0) Spin();
         }
 
@@ -380,11 +387,6 @@ namespace Casiwar
         private void BuildViews()
         {
             if (views != null || gridContainer == null || cellPrefab == null) return;
-            Rect rect = gridContainer.rect;
-            step = Mathf.Min(rect.width / Reels, rect.height / Rows);
-            if (step < 1f) step = 170f;
-            float tileSize = Mathf.Max(8f, step - tileSpacing);
-
             views = new TileView[Reels, Rows];
             for (int y = 0; y < Rows; y++)
             {
@@ -392,11 +394,10 @@ namespace Casiwar
                 {
                     TileView view = Instantiate(cellPrefab, gridContainer);
                     view.Init(null, new Vector2Int(x, y));
-                    var home = new Vector2((x - (Reels - 1) * 0.5f) * step, ((Rows - 1) * 0.5f - y) * step);
-                    view.Place(home, tileSize, dropSpeed * step);
                     views[x, y] = view;
                 }
             }
+            LayoutViews();
 
             // Слой для нарисованных линий выигрыша — поверх символов
             linesRoot = new GameObject("Paylines", typeof(RectTransform)).GetComponent<RectTransform>();
@@ -406,6 +407,24 @@ namespace Casiwar
             linesRoot.offsetMin = Vector2.zero;
             linesRoot.offsetMax = Vector2.zero;
             linesRoot.SetAsLastSibling();
+        }
+
+        private void LayoutViews()
+        {
+            if (views == null || gridContainer == null) return;
+            Rect rect = gridContainer.rect;
+            lastContainerSize = rect.size;
+            step = Mathf.Min(rect.width / Reels, rect.height / Rows);
+            if (step < 1f) step = 170f;
+            float tileSize = Mathf.Max(8f, step - tileSpacing);
+            for (int y = 0; y < Rows; y++)
+            {
+                for (int x = 0; x < Reels; x++)
+                {
+                    var home = new Vector2((x - (Reels - 1) * 0.5f) * step, ((Rows - 1) * 0.5f - y) * step);
+                    views[x, y].Place(home, tileSize, dropSpeed * step);
+                }
+            }
         }
 
         /// <summary>Линия выигрыша поверх барабанов — цветом класса, которому трофей (монеты — золотом).</summary>

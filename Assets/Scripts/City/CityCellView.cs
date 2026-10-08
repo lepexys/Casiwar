@@ -32,8 +32,10 @@ namespace Casiwar
         }
 
         /// <param name="note">Подпись вместо звёзд улучшений (например, жители дома «👤3»).</param>
-        public void Bind(Building building, bool selected, string note = null)
+        /// <param name="upgradable">В здании можно что-то купить прямо сейчас — клетка пульсирует золотой обводкой.</param>
+        public void Bind(Building building, bool selected, string note = null, bool upgradable = false)
         {
+            AttentionPulse.Set(background, building != null && upgradable);
             if (building == null)
             {
                 background.color = selected ? Color.Lerp(emptyColor, selectedTint, 0.35f) : emptyColor;

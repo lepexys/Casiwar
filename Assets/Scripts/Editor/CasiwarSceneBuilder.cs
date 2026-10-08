@@ -30,7 +30,7 @@ namespace Casiwar.EditorTools
         /// Версия сцены: поднимайте при каждом изменении того, что строит сборщик (UI, префабы, связи).
         /// Сцена старой версии → редактор сам предложит её пересобрать (CasiwarSceneUpdateCheck).
         /// </summary>
-        public const int SceneVersion = 10;
+        public const int SceneVersion = 15;
         public const string FontAssetPath = FontsFolder + "/Casiwar SDF.asset";
         public const string IconsSpriteAssetPath = FontsFolder + "/Casiwar Icons.asset";
         private const string UnitsFolder = "Assets/Data/Units";
@@ -40,6 +40,11 @@ namespace Casiwar.EditorTools
         private const string IconsTexturePath = FontsFolder + "/Casiwar Icons.png";
         private const string SourceFontPath = "Assets/TextMesh Pro/Fonts/LiberationSans.ttf";
         private const float HudHeight = 100f;
+        // Горизонтальная раскладка (1920×1080): ширина левой колонки, правой колонки и высота вкладок под панелью вкладок
+        private const float LandLeft = 830f;
+        private const float LandRight = 1060f;
+        private const float LandTabHeight = 868f;
+        private const float RosterHeight = 190f; // панель наших юнитов внизу экрана боя
         private const int IconSize = 128;
         private const string IconsVersion = "casiwar-icons-v5";
 
@@ -64,7 +69,9 @@ namespace Casiwar.EditorTools
         private static readonly Color MutedText = new Color(0.75f, 0.78f, 0.85f);
 
         private static TMP_FontAsset uiFont;
+        private static AdaptiveLayout adaptive;
         private static List<UnitData> specialUnits = new List<UnitData>();
+        private static List<UnitData> enemySpecials = new List<UnitData>();
         private static Sprite uiSprite;
         private static Sprite UiSprite =>
             uiSprite != null ? uiSprite : (uiSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/UISprite.psd"));
@@ -157,6 +164,19 @@ namespace Casiwar.EditorTools
                     armor: 0, heal: 0, shieldBearer: false, sell: 0),
             };
 
+            // 2б) Особые варвары: подрывники и шаманы-маги с 10-го дня, вождь-богатырь с 15-го (числа — UnitData.Defaults)
+            enemySpecials = new List<UnitData>();
+            foreach ((UnitClass unitClass, string file) in new[]
+                     {
+                         (UnitClass.Bomber, "Enemy_Bomber"), (UnitClass.Mage, "Enemy_Shaman"), (UnitClass.Hero, "Enemy_Chieftain"),
+                     })
+            {
+                UnitData.Defaults(unitClass, out _, out int hp, out int attack, out int range, out int armor, out int heal,
+                    out bool shieldBearer, out _);
+                enemySpecials.Add(CreateOrLoadUnit(file, AutoBattleManager.EnemySpecialName(unitClass), unitClass, hp, attack, range, 1,
+                    armor, heal, shieldBearer, 0));
+            }
+
             // 3) Снаряжение: тяжёлое — воинам, кожаное — лучникам, ряса и посох — жрецам
             var items = new List<ItemData>
             {
@@ -183,8 +203,8 @@ namespace Casiwar.EditorTools
             };
 
             // 6) Камера, свет, системы, Canvas и все связи
-            CreateCameraAndLight();
-            BuildSceneObjects(units, barbarians, items, militia, prefabs);
+            Camera camera = CreateCameraAndLight();
+            BuildSceneObjects(units, barbarians, items, militia, prefabs, camera);
 
             EditorSceneManager.SaveScene(scene, ScenePath);
             AddSceneToBuildSettings(ScenePath);
@@ -206,7 +226,7 @@ namespace Casiwar.EditorTools
         //  Сцена
         // =====================================================================
 
-        private static void CreateCameraAndLight()
+        private static Camera CreateCameraAndLight()
         {
             var cameraGo = new GameObject("Main Camera") { tag = "MainCamera" };
             cameraGo.transform.position = new Vector3(0f, 0f, -10f);
@@ -224,10 +244,11 @@ namespace Casiwar.EditorTools
             light.lightType = Light2D.LightType.Global;
             light.color = Color.white;
             light.intensity = 1f;
+            return camera;
         }
 
         private static void BuildSceneObjects(List<UnitData> units, List<UnitData> barbarians, List<ItemData> items,
-            UnitData starter, UiPrefabs prefabs)
+            UnitData starter, UiPrefabs prefabs, Camera camera)
         {
             // ---------- Системы (логика) ----------
             GameManager game = new GameObject("GameManager").AddComponent<GameManager>();
@@ -252,6 +273,10 @@ namespace Casiwar.EditorTools
             scaler.referenceResolution = new Vector2(1080f, 1920f);
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
             var root = (RectTransform)canvasGo.transform;
+            // Вертикальная раскладка строится ниже; горизонтальную (ПК) — в конце, через Landscape(...)
+            adaptive = canvasGo.AddComponent<AdaptiveLayout>();
+            adaptive.scaler = scaler;
+            adaptive.entries = new List<AdaptiveLayout.Entry>();
 
             // ===== День: вкладки «Город», «Наука», «Поле», «Войска» (день начинается с «Города») =====
             RectTransform prepScreen = NewRect("PrepScreen", root);
@@ -331,15 +356,10 @@ namespace Casiwar.EditorTools
             TextMeshProUGUI panelInfo = NewText("Info", panel, string.Empty, 24f, TextAlignmentOptions.TopLeft, MutedText);
             Anchored(panelInfo.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(20f, -66f), new Vector2(560f, 300f));
             AutoSize(panelInfo, 14f, 24f);
+            // Действия здания (постройка, улучшения, ремонт, караваны) — прокручиваемый список: чудес света много
             RectTransform actions = NewRect("Actions", panel);
-            Anchored(actions, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-16f, -12f), new Vector2(440f, 356f));
-            var actionsLayout = actions.gameObject.AddComponent<VerticalLayoutGroup>();
-            actionsLayout.spacing = 6f;
-            actionsLayout.childAlignment = TextAnchor.UpperCenter;
-            actionsLayout.childControlWidth = true;
-            actionsLayout.childForceExpandWidth = true;
-            actionsLayout.childControlHeight = false;
-            actionsLayout.childForceExpandHeight = false;
+            Anchored(actions, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-16f, -12f), new Vector2(458f, 356f));
+            RectTransform actionsList = ScrollList(actions, 6f);
             CityMapView mapView = cityTab.gameObject.AddComponent<CityMapView>();
             cityTab.gameObject.SetActive(false);
 
@@ -351,12 +371,14 @@ namespace Casiwar.EditorTools
             AutoSize(techSummary, 14f, 24f);
             string[] branchTitles = { "Хозяйство", "Знания", "Пехота", "Стрелки", "Вера" };
             var columns = new RectTransform[branchTitles.Length];
+            var techHeaders = new RectTransform[branchTitles.Length];
             for (int i = 0; i < branchTitles.Length; i++)
             {
                 float x = (i - 2f) * 210f;
                 TextMeshProUGUI header = NewText($"Header_{i}", techTab, branchTitles[i], 26f, TextAlignmentOptions.Center, GoldText, bold: true);
                 Anchored(header.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -76f), new Vector2(200f, 40f));
                 AutoSize(header, 16f, 26f);
+                techHeaders[i] = header.rectTransform;
                 RectTransform column = NewRect($"Column_{i}", techTab);
                 Anchored(column, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -120f), new Vector2(200f, 1060f));
                 var columnLayout = column.gameObject.AddComponent<VerticalLayoutGroup>();
@@ -380,26 +402,30 @@ namespace Casiwar.EditorTools
             string[] branchNames = { "Ближний бой", "Дальний бой", "Магия" };
             UnitClass[] branchClasses = { UnitClass.Warrior, UnitClass.Archer, UnitClass.Priest };
             var unitColumns = new RectTransform[branchNames.Length];
+            var unitViewports = new RectTransform[branchNames.Length];
             var unitStatus = new TMP_Text[branchNames.Length];
+            var unitHeaders = new RectTransform[branchNames.Length];
             for (int i = 0; i < branchNames.Length; i++)
             {
                 float x = (i - 1) * 350f;
                 TextMeshProUGUI header = NewText($"Branch_{i}", unitsTab, branchNames[i], 30f, TextAlignmentOptions.Center,
                     Color.Lerp(GameVisuals.ClassColor(branchClasses[i]), Color.white, 0.25f), bold: true);
                 Anchored(header.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -70f), new Vector2(330f, 38f));
+                unitHeaders[i] = header.rectTransform;
                 TextMeshProUGUI status = NewText($"Status_{i}", unitsTab, string.Empty, 20f, TextAlignmentOptions.Center, MutedText);
                 Anchored(status.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -108f), new Vector2(330f, 30f));
                 AutoSize(status, 12f, 20f);
-                RectTransform column = NewRect($"BranchColumn_{i}", unitsTab);
-                Anchored(column, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -142f), new Vector2(330f, 1060f));
-                var columnLayout = column.gameObject.AddComponent<VerticalLayoutGroup>();
-                columnLayout.spacing = 8f;
-                columnLayout.childAlignment = TextAnchor.UpperCenter;
-                columnLayout.childControlWidth = true;
-                columnLayout.childForceExpandWidth = true;
-                columnLayout.childControlHeight = false;
-                columnLayout.childForceExpandHeight = false;
+                // Колонка прокручивается (колесо мыши, свайп, полоса справа): у гильдий с гибридами улучшений больше,
+                // чем влезает. По высоте — до низа вкладки, чтобы и последняя карточка не уходила за край экрана
+                RectTransform branch = NewRect($"BranchColumn_{i}", unitsTab);
+                branch.anchorMin = new Vector2(0.5f, 0f);
+                branch.anchorMax = new Vector2(0.5f, 1f);
+                branch.pivot = new Vector2(0.5f, 1f);
+                branch.anchoredPosition = new Vector2(x, -142f);
+                branch.sizeDelta = new Vector2(330f, -154f);
+                RectTransform column = ScrollList(branch, 8f);
                 unitColumns[i] = column;
+                unitViewports[i] = branch;
                 unitStatus[i] = status;
             }
             UnitTreeView unitView = unitsTab.gameObject.AddComponent<UnitTreeView>();
@@ -420,12 +446,10 @@ namespace Casiwar.EditorTools
             TextMeshProUGUI stepText = NewText("StepText", arena, string.Empty, 30f, TextAlignmentOptions.Center, MutedText, bold: true);
             Anchored(stepText.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(12f, -12f), new Vector2(200f, 84f));
             AutoSize(stepText, 16f, 30f);
-            TextMeshProUGUI legend = NewText("Legend", arena,
-                $"{GameVisuals.IconAttack} — бьют\n{GameVisuals.IconMove} — ходят\nВ Л Ж П М Мг — навыки\n{GameVisuals.IconBanner} — джокер\n×2 — множитель\n" +
-                $"3 {GameVisuals.IconCandle} — чудо\n\nКаскад: кластер от 5 лопается, новая волна ×2, ×3",
-                24f, TextAlignmentOptions.TopLeft, MutedText);
-            Anchored(legend.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -110f), new Vector2(196f, 420f));
-            AutoSize(legend, 14f, 24f);
+            // Легенда: что делает каждый символ — пишет AutoBattleManager под армию и открытые символы
+            TextMeshProUGUI legend = NewText("Legend", arena, string.Empty, 22f, TextAlignmentOptions.TopLeft, MutedText);
+            Anchored(legend.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -110f), new Vector2(196f, 520f));
+            AutoSize(legend, 10f, 22f);
             Button speedButton = NewButton("Btn_Speed", arena, "Скорость ×1", ButtonColor, 30f, out TextMeshProUGUI speedLabel);
             Anchored((RectTransform)speedButton.transform, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-12f, -12f), new Vector2(196f, 84f));
 
@@ -437,6 +461,34 @@ namespace Casiwar.EditorTools
             AutoSize(enemyTurn, 16f, 28f);
             TextMeshProUGUI battleResult = NewText("BattleResultText", arena, string.Empty, 120f, TextAlignmentOptions.Center, Color.white, bold: true);
             Anchored(battleResult.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0.5f), new Vector2(0f, -1265f), new Vector2(1040f, 220f));
+            // Где арена на экране: в горизонтальной раскладке AdaptiveLayout вписывает в эту рамку камеру
+            RectTransform arenaFrame = NewRect("ArenaFrame", arena);
+            Stretch(arenaFrame, 0f, 0f, 860f, RosterHeight + 24f);
+
+            // Наши юниты внизу экрана: атака и точное ХП, колонка — шеренга (на арене — только полоски с делениями)
+            RectTransform roster = NewRect("Roster", arena);
+            BottomStretch(roster, 12f, RosterHeight, 20f);
+            AddImage(roster, new Color(0.06f, 0.06f, 0.09f, 0.85f), sliced: true, raycast: false);
+            AddRow(roster, 14f);
+            roster.GetComponent<HorizontalLayoutGroup>().padding = new RectOffset(14, 14, 8, 8);
+            var rosterLabels = new List<TMP_Text>();
+            for (int c = 0; c < 3; c++)
+            {
+                RectTransform rank = NewRect($"Rank_{c}", roster);
+                Flex(rank.gameObject, 1f);
+                var rankLayout = rank.gameObject.AddComponent<VerticalLayoutGroup>();
+                rankLayout.childControlWidth = true;
+                rankLayout.childControlHeight = true;
+                rankLayout.childForceExpandWidth = true;
+                rankLayout.childForceExpandHeight = true;
+                for (int r = 0; r < 5; r++)
+                {
+                    TextMeshProUGUI label = NewText($"Unit_{c * 5 + r}", rank, string.Empty, 22f, TextAlignmentOptions.Left, Color.white);
+                    label.enableWordWrapping = false;
+                    AutoSize(label, 10f, 22f);
+                    rosterLabels.Add(label);
+                }
+            }
             battleScreen.gameObject.SetActive(false);
 
             // ===== Трофеи: слот 5×3 с линиями выплат, круток — по числу выживших =====
@@ -452,7 +504,7 @@ namespace Casiwar.EditorTools
                 26f, TextAlignmentOptions.Center, MutedText);
             TopStretch(lootHint.rectTransform, 76f, 84f, 30f);
             AutoSize(lootHint, 16f, 26f);
-            BuildPaylineLegend(loot, 166f);
+            RectTransform paylineLegend = BuildPaylineLegend(loot, 166f);
             RectTransform reels = NewRect("Reels", loot);
             Anchored(reels, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -314f), new Vector2(880f, 528f));
             AddImage(reels, GridBg, sliced: true, raycast: false);
@@ -524,6 +576,94 @@ namespace Casiwar.EditorTools
             Anchored((RectTransform)restartButton.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -200f), new Vector2(520f, 150f));
             gameOver.gameObject.SetActive(false);
 
+            // ===== Горизонтальная раскладка (ПК, 1920×1080): слева — поле/барабаны/слот, справа — панели и армия =====
+            // Слева колонка шириной LandLeft (от x=20), справа — LandRight (армия прижата к правому нижнему углу).
+            Landscape(hudRow, r => r.sizeDelta = new Vector2(1500f, 0f));
+            Landscape(prep, r => Stretch(r, 0f, 0f, 0f, 0f));
+
+            Landscape(boardTab, r => TopStretch(r, 112f, LandTabHeight, 0f));
+            Landscape(gridArea, r => TopLeft(r, 20f, 8f, LandLeft, LandLeft));
+            Landscape(focusBar, r => TopRight(r, 20f, 8f, LandRight - 40f, 80f));
+            Landscape(boardControls, r => TopRight(r, 20f, 100f, LandRight - 40f, 92f));
+
+            Landscape(cityTab, r => TopStretch(r, 112f, LandTabHeight, 0f));
+            Landscape(map, r => Stretch(r, 20f, 760f, 78f, 0f));
+            Landscape(panel, r => TopRight(r, 20f, 78f, 720f, LandTabHeight - 78f));
+            Landscape(panelTitle.rectTransform, r => TopLeft(r, 20f, 12f, 680f, 50f));
+            Landscape(panelInfo.rectTransform, r => TopLeft(r, 20f, 66f, 680f, 300f));
+            Landscape(actions, r => Anchored(r, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -380f), new Vector2(680f, 400f)));
+
+            // Деревья науки и войск высокие — колонки шире, а вкладка целиком чуть мельче
+            Landscape(techTab, r => Anchored(r, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -112f), new Vector2(1700f, 1100f)), 0.78f);
+            for (int i = 0; i < columns.Length; i++)
+            {
+                float x = (i - 2f) * 335f;
+                Landscape(techHeaders[i], r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 320f);
+                Landscape(columns[i], r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 320f);
+            }
+            Landscape(unitsTab, r => Anchored(r, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -112f), new Vector2(1800f, 1180f)), 0.735f);
+            for (int i = 0; i < unitColumns.Length; i++)
+            {
+                float x = (i - 1) * 580f;
+                Landscape(unitHeaders[i], r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 540f);
+                Landscape(unitStatus[i].rectTransform, r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 540f);
+                Landscape(unitViewports[i], r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 540f);
+            }
+
+            // Бой: слева слот и подписи, посередине легенда, справа — арена (камера вписывает её в ArenaFrame)
+            Landscape(arena, r => Stretch(r, 0f, 0f, 0f, 0f));
+            Landscape(stepText.rectTransform, r => TopLeft(r, 20f, 12f, 200f, 84f));
+            Landscape((RectTransform)speedButton.transform, r => TopLeft(r, 524f, 12f, 196f, 84f));
+            Landscape(slotPanel, r => TopLeft(r, 20f, 108f, 700f, 700f));
+            Landscape(slotResult.rectTransform, r => TopLeft(r, 20f, 816f, 700f, 56f));
+            Landscape(enemyTurn.rectTransform, r => TopLeft(r, 20f, 876f, 700f, 44f));
+            Landscape(legend.rectTransform, r => TopLeft(r, 740f, 108f, 225f, 860f));
+            Landscape(arenaFrame, r => Stretch(r, 980f, 20f, 12f, RosterHeight + 24f));
+            Landscape(battleResult.rectTransform, r => Stretch(r, 980f, 20f, 12f, RosterHeight + 24f));
+            Landscape(roster, r =>
+            {
+                r.anchorMin = new Vector2(0f, 0f);
+                r.anchorMax = new Vector2(1f, 0f);
+                r.pivot = new Vector2(0.5f, 0f);
+                r.offsetMin = new Vector2(980f, 12f);
+                r.offsetMax = new Vector2(-20f, 12f + RosterHeight);
+            });
+
+            // Трофеи: слева барабаны и журнал, справа подсказка, легенда линий и армия
+            Landscape(loot, r => Stretch(r, 0f, 0f, 0f, 0f));
+            Landscape(lootTitle.rectTransform, r => TopLeft(r, 20f, 10f, LandLeft, 64f));
+            Landscape(reels, r => TopLeft(r, 20f, 84f, LandLeft, LandLeft * 0.6f));
+            Landscape(lootControls, r => TopLeft(r, 20f, 594f, LandLeft, 96f));
+            Landscape(lootLog.rectTransform, r => TopLeft(r, 20f, 700f, LandLeft, 270f));
+            Landscape(lootHint.rectTransform, r => TopRight(r, 20f, 10f, LandRight - 40f, 100f));
+            Landscape(paylineLegend, r => TopRight(r, 10f, 120f, LandRight - 20f, 136f));
+
+            Landscape(benchPanel, r => Anchored(r, new Vector2(1f, 0f), new Vector2(1f, 0f), Vector2.zero, new Vector2(LandRight, 400f)));
+            Landscape(benchColumn, r => r.sizeDelta = new Vector2(LandRight, 0f));
+            // Сообщения — туда, где они ничего не закрывают: над армией, под ареной боя или поверх строки сводки под вкладками
+            System.Action<RectTransform> aboveBench = r =>
+                Anchored(r, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-20f, 410f), new Vector2(LandRight - 40f, 104f));
+            Landscape(messagePanel, aboveBench);
+            adaptive.messagePanel = messagePanel;
+            adaptive.messageDocks = new List<AdaptiveLayout.Dock>
+            {
+                new AdaptiveLayout.Dock { whenActive = benchPanel.gameObject, pose = PoseOf(messagePanel, aboveBench) },
+                new AdaptiveLayout.Dock
+                {
+                    whenActive = battleScreen.gameObject,
+                    pose = PoseOf(messagePanel, r => Anchored(r, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-20f, 4f), new Vector2(900f, 100f))),
+                },
+                new AdaptiveLayout.Dock
+                {
+                    whenActive = prepScreen.gameObject,
+                    pose = PoseOf(messagePanel, r => Anchored(r, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -(HudHeight + 108f)), new Vector2(1400f, 64f))),
+                },
+            };
+
+            adaptive.worldCamera = camera;
+            adaptive.battle = battle;
+            adaptive.arenaFrame = arenaFrame;
+
             // ---------- Связи между скриптами ----------
             game.cityGrid = cityGrid;
             game.lootSlot = lootSlot;
@@ -593,7 +733,10 @@ namespace Casiwar.EditorTools
             battle.resultText = battleResult;
             battle.enemyTurnText = enemyTurn;
             battle.speedButtonLabel = speedLabel;
+            battle.rosterLabels = rosterLabels.ToArray();
+            battle.legendText = legend;
             battle.enemyPool = new List<UnitData>(barbarians);
+            battle.enemySpecials = new List<UnitData>(enemySpecials);
 
             slotMachine.gridContainer = slotGrid;
             slotMachine.cellPrefab = prefabs.Tile;
@@ -607,7 +750,7 @@ namespace Casiwar.EditorTools
             mapView.summaryText = citySummary;
             mapView.panelTitle = panelTitle;
             mapView.panelInfo = panelInfo;
-            mapView.actionsContainer = actions;
+            mapView.actionsContainer = actionsList;
             mapView.actionButtonPrefab = prefabs.ActionButton;
 
             techView.techTree = techTree;
@@ -719,7 +862,7 @@ namespace Casiwar.EditorTools
         }
 
         /// <summary>Легенда линий трофеев: три группы мини-сеток 5×3 — прямые воинам, углы лучникам, зигзаги жрецам.</summary>
-        private static void BuildPaylineLegend(RectTransform parent, float top)
+        private static RectTransform BuildPaylineLegend(RectTransform parent, float top)
         {
             const float cell = 16f;
             const float gap = 3f;
@@ -760,6 +903,7 @@ namespace Casiwar.EditorTools
                     }
                 }
             }
+            return legend;
         }
 
         private static Image Badge(string name, RectTransform parent, Vector2 corner, Vector2 offset)
@@ -809,7 +953,7 @@ namespace Casiwar.EditorTools
         {
             var root = new GameObject("UpgradeCard", typeof(RectTransform)) { layer = LayerMask.NameToLayer("UI") };
             var rect = (RectTransform)root.transform;
-            rect.sizeDelta = new Vector2(330f, 108f);
+            rect.sizeDelta = new Vector2(330f, 128f);
             Image background = AddImage(rect, CardBg, sliced: true, raycast: true);
             UpgradeCardView view = root.AddComponent<UpgradeCardView>();
 
@@ -817,7 +961,7 @@ namespace Casiwar.EditorTools
             TopStretch(title.rectTransform, 4f, 28f, 8f);
             AutoSize(title, 12f, 22f);
             TextMeshProUGUI description = NewText("Description", rect, string.Empty, 15f, TextAlignmentOptions.Center, MutedText);
-            TopStretch(description.rectTransform, 32f, 36f, 8f);
+            TopStretch(description.rectTransform, 31f, 58f, 8f); // описания особых символов длинные — места на 3–4 строки
             AutoSize(description, 10f, 15f);
             Button button = NewButton("Button", rect, "Купить", BuildColor, 17f, out TextMeshProUGUI buttonLabel);
             BottomStretch((RectTransform)button.transform, 5f, 32f, 8f);
@@ -1469,6 +1613,35 @@ namespace Casiwar.EditorTools
             rect.sizeDelta = new Vector2(-2f * side, height);
         }
 
+        /// <summary>
+        /// Записать горизонтальную позу элемента (раскладка для ПК): arrange ставит её обычными хелперами,
+        /// после чего элемент возвращается в вертикальную позу. Переключает позы AdaptiveLayout.
+        /// </summary>
+        private static void Landscape(RectTransform rect, System.Action<RectTransform> arrange, float scale = 1f, float width = -1f)
+        {
+            AdaptiveLayout.Pose portrait = AdaptiveLayout.Pose.Of(rect);
+            AdaptiveLayout.Pose landscape = PoseOf(rect, arrange, scale, width);
+            adaptive.entries.Add(new AdaptiveLayout.Entry { rect = rect, portrait = portrait, landscape = landscape });
+        }
+
+        /// <summary>Поза, которую arrange придал бы элементу; сам элемент остаётся как был.</summary>
+        private static AdaptiveLayout.Pose PoseOf(RectTransform rect, System.Action<RectTransform> arrange, float scale = 1f, float width = -1f)
+        {
+            AdaptiveLayout.Pose original = AdaptiveLayout.Pose.Of(rect);
+            arrange(rect);
+            if (width > 0f) rect.sizeDelta = new Vector2(width, rect.sizeDelta.y);
+            rect.localScale = new Vector3(scale, scale, 1f);
+            AdaptiveLayout.Pose pose = AdaptiveLayout.Pose.Of(rect);
+            original.ApplyTo(rect);
+            return pose;
+        }
+
+        private static void TopLeft(RectTransform rect, float left, float top, float width, float height) =>
+            Anchored(rect, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(left, -top), new Vector2(width, height));
+
+        private static void TopRight(RectTransform rect, float right, float top, float width, float height) =>
+            Anchored(rect, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-right, -top), new Vector2(width, height));
+
         private static void Anchored(RectTransform rect, Vector2 anchor, Vector2 pivot, Vector2 position, Vector2 size)
         {
             rect.anchorMin = anchor;
@@ -1489,6 +1662,64 @@ namespace Casiwar.EditorTools
             image.color = color;
             image.raycastTarget = raycast;
             return image;
+        }
+
+        /// <summary>
+        /// Сделать из root прокручиваемый список (колесо мыши, свайп, полоса справа — видна, когда не влезает).
+        /// Возвращает Content: VerticalLayoutGroup, высота — по содержимому.
+        /// </summary>
+        private static RectTransform ScrollList(RectTransform root, float spacing)
+        {
+            var scroll = root.gameObject.AddComponent<ScrollRect>();
+            RectTransform viewport = NewRect("Viewport", root);
+            Stretch(viewport, 0f, 18f, 0f, 0f);
+            viewport.gameObject.AddComponent<RectMask2D>();
+            AddImage(viewport, new Color(0f, 0f, 0f, 0f), sliced: false, raycast: true); // колесо мыши ловится и между строками
+            Scrollbar scrollbar = BuildScrollbar(root);
+            RectTransform content = NewRect("Content", viewport);
+            content.anchorMin = new Vector2(0f, 1f);
+            content.anchorMax = new Vector2(1f, 1f);
+            content.pivot = new Vector2(0.5f, 1f);
+            content.anchoredPosition = Vector2.zero;
+            content.sizeDelta = Vector2.zero;
+            var layout = content.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = spacing;
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childForceExpandWidth = true;
+            layout.childControlHeight = false;
+            layout.childForceExpandHeight = false;
+            content.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            scroll.content = content;
+            scroll.viewport = viewport;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 60f;
+            scroll.verticalScrollbar = scrollbar;
+            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
+            return content;
+        }
+
+        /// <summary>Вертикальная полоса прокрутки у правого края parent (ручка тянется мышью).</summary>
+        private static Scrollbar BuildScrollbar(RectTransform parent)
+        {
+            RectTransform track = NewRect("Scrollbar", parent);
+            track.anchorMin = new Vector2(1f, 0f);
+            track.anchorMax = new Vector2(1f, 1f);
+            track.pivot = new Vector2(1f, 0.5f);
+            track.anchoredPosition = Vector2.zero;
+            track.sizeDelta = new Vector2(10f, 0f);
+            AddImage(track, new Color(0.12f, 0.13f, 0.17f, 0.9f), sliced: true, raycast: true);
+            RectTransform handle = NewRect("Handle", track);
+            handle.offsetMin = Vector2.zero;
+            handle.offsetMax = Vector2.zero;
+            Image handleImage = AddImage(handle, new Color(0.58f, 0.63f, 0.75f), sliced: true, raycast: true);
+            var scrollbar = track.gameObject.AddComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+            scrollbar.handleRect = handle;
+            scrollbar.targetGraphic = handleImage;
+            return scrollbar;
         }
 
         private static void AddRow(RectTransform rect, float spacing, bool controlChildSize = true)

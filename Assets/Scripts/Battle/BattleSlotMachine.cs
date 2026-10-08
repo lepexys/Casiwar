@@ -14,7 +14,7 @@ namespace Casiwar
         Blank,      // пусто
         Attack,     // ⚔ обычная атака
         Move,       // ➜ перемещение
-        Warrior,    // массовый навык воинов — «Стена щитов» / «Строй»
+        Warrior,    // массовый навык воинов — «Рывок» / «Таран щитом»
         Archer,     // массовый навык лучников — «Залп»
         Priest,     // массовый навык жрецов — «Молитва»
         Banner,     // 🚩 Знамя — джокер: становится частью любого соседнего кластера
@@ -189,6 +189,7 @@ namespace Casiwar
         private TileView[,] views;
         private int size;
         private float step;
+        private Vector2 lastContainerSize;
         private readonly List<UnitClass> playerClasses = new List<UnitClass>();
         private Coroutine spinRoutine;
 
@@ -231,10 +232,10 @@ namespace Casiwar
             return string.Join(" · ", parts);
         }
 
-        /// <summary>Навык класса игрока: воины без щитов делают «Строй».</summary>
+        /// <summary>Навык класса игрока: воины без щитов делают «Рывок», со щитами — «Таран щитом».</summary>
         private string SkillTitle(UnitClass unitClass)
         {
-            return unitClass == UnitClass.Warrior && (city == null || city.ShieldLevel == 0) ? "Строй" : GameVisuals.SkillName(unitClass);
+            return unitClass == UnitClass.Warrior && (city == null || city.ShieldLevel == 0) ? "Рывок" : GameVisuals.SkillName(unitClass);
         }
 
         public int SizeFor(int militaryLevel)
@@ -568,12 +569,6 @@ namespace Casiwar
             size = newSize;
             if (gridContainer == null || cellPrefab == null) return; // без UI слот всё равно работает
 
-            Rect rect = gridContainer.rect;
-            float side = Mathf.Min(rect.width, rect.height);
-            if (side < 1f) side = 600f;
-            step = side / size;
-            float cellSize = Mathf.Max(8f, step - tileSpacing);
-
             views = new TileView[size, size];
             for (int y = 0; y < size; y++)
             {
@@ -581,11 +576,36 @@ namespace Casiwar
                 {
                     TileView view = Instantiate(cellPrefab, gridContainer);
                     view.Init(null, new Vector2Int(x, y));
-                    var home = new Vector2((x - (size - 1) * 0.5f) * step, ((size - 1) * 0.5f - y) * step);
-                    view.Place(home, cellSize, dropSpeed * step);
                     views[x, y] = view;
                 }
             }
+            LayoutViews();
+        }
+
+        private void LayoutViews()
+        {
+            if (views == null || gridContainer == null) return;
+            Rect rect = gridContainer.rect;
+            lastContainerSize = rect.size;
+            float side = Mathf.Min(rect.width, rect.height);
+            if (side < 1f) side = 600f;
+            step = side / size;
+            float cellSize = Mathf.Max(8f, step - tileSpacing);
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    var home = new Vector2((x - (size - 1) * 0.5f) * step, ((size - 1) * 0.5f - y) * step);
+                    views[x, y].Place(home, cellSize, dropSpeed * step);
+                }
+            }
+        }
+
+        private void Update()
+        {
+            // Окно поменяло размер (или раскладку) — переставляем символы
+            if (views != null && !IsSpinning && gridContainer != null && gridContainer.rect.size != lastContainerSize)
+                LayoutViews();
         }
 
         /// <summary>Первая волна: все символы падают сверху, колонки с небольшой задержкой.</summary>

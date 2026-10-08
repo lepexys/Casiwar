@@ -15,6 +15,8 @@ namespace Casiwar
         public int Level;
         public int Stars;
         public bool IsHero;
+        /// <summary>Черты богатыря — из символов его линии.</summary>
+        public HeroTraits Traits;
     }
 
     /// <summary>
@@ -41,6 +43,7 @@ namespace Casiwar
                     Level = 1,
                     Stars = Mathf.Clamp(run.Length - HeroLength + 1, 1, UnitData.MaxStars),
                     IsHero = true,
+                    Traits = HeroTraits.From(tiles),
                 };
             }
 
@@ -97,6 +100,7 @@ namespace Casiwar
     /// Движок поля — в MatchBoard; здесь то, что относится к городу:
     /// • какие символы падают: ресурсы (золото, производство ⚒, еда) и юниты. Нейтралы — всегда;
     ///   воины, лучники и жрецы — только если в городе стоит их здание (казармы, стрельбище, святилище);
+    ///   построили такое здание посреди дня — фишки поля сразу перекатываются, чтобы новый класс был на поле;
     /// • доля ресурсов постоянна, а делится она по фокусу города (например 2:1:1). Фокус выбирают
     ///   кнопками «Завтра» — он начинает действовать со следующего дня; юниты падают как обычно;
     /// • что даёт линия: юнит → на скамейку (линия 4 — сразу 2-го уровня, 5+ — 3-го; три одинаковых
@@ -139,6 +143,8 @@ namespace Casiwar
         [Range(1, UnitData.MaxLevel)] public int maxRecruitLevel = 3;
 
         private readonly Dictionary<UnitClass, UnitData> fallbackUnits = new Dictionary<UnitClass, UnitData>();
+        /// <summary>Какие базовые классы уже падают на поле (null — ещё не знаем: первое изменение города).</summary>
+        private HashSet<UnitClass> knownClasses;
 
         private void Awake()
         {
@@ -159,6 +165,32 @@ namespace Casiwar
         {
             UpdateFocusUi();
             RefreshRules();
+            RerollIfNewClass();
+        }
+
+        /// <summary>
+        /// Построили (или починили) казармы, стрельбище или святилище — на поле ещё нет юнитов этого класса,
+        /// поэтому фишки поля перекатываются сразу (пустые клетки, запас и ходы не трогаются).
+        /// </summary>
+        private void RerollIfNewClass()
+        {
+            var unlocked = new HashSet<UnitClass>(UnitClasses.Base.Where(c => city.IsClassUnlocked(c)));
+            List<UnitClass> added = knownClasses == null ? new List<UnitClass>() : unlocked.Where(c => !knownClasses.Contains(c)).ToList();
+            knownClasses = unlocked;
+            if (added.Count == 0 || !IsPhaseActive) return;
+            RerollTiles();
+            ShowMessage($"Поле обновлено: на нём появились {string.Join(", ", added.Select(ClassNamePlural))}");
+        }
+
+        private static string ClassNamePlural(UnitClass unitClass)
+        {
+            switch (unitClass)
+            {
+                case UnitClass.Warrior: return "воины";
+                case UnitClass.Archer: return "лучники";
+                case UnitClass.Priest: return "жрецы";
+                default: return GameVisuals.ClassName(unitClass).ToLowerInvariant();
+            }
         }
 
         /// <summary>Правила смешанных линий — по изученной науке (гибриды, «Былины»).</summary>
@@ -290,11 +322,11 @@ namespace Casiwar
             UnitData recruit = plan.Unit;
             if (recruit == null) return;
 
-            BenchUnit added = bench != null ? bench.AddRecruit(recruit, plan.Level, plan.Stars) : null;
+            BenchUnit added = bench != null ? bench.AddRecruit(recruit, plan.Level, plan.Stars, plan.Traits) : null;
             if (added != null)
             {
                 // Слияние (три одинаковых → ★ выше) скамейка объявляет сама
-                if (plan.IsHero) ShowMessage($"Богатырь {GameVisuals.Stars(plan.Stars)} пришёл в армию! (линия из {run.Length})");
+                if (plan.IsHero) ShowMessage($"{added.Name} {GameVisuals.Stars(plan.Stars)} пришёл в армию! {plan.Traits.Summary}");
                 else if (UnitClasses.IsHybrid(recruit.unitClass))
                     ShowMessage($"+ {recruit.unitName}: {string.Join(" + ", UnitClasses.Parents(recruit.unitClass).Select(GameVisuals.ClassName))}" +
                                 (plan.Level > 1 ? $", ур. {plan.Level}" : string.Empty));

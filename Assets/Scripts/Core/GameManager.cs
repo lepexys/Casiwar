@@ -24,7 +24,8 @@ namespace Casiwar
     ///             «Наука»: изучаем технологии за очки знаний;
     ///             «Войска»: прокачиваем отряды за золото в гильдиях (ближний бой, дальний бой, магия);
     ///   вечер   — «В БОЙ!»: приходит волна варваров;
-    ///   победа  — трофеи (броня и оружие) → следующий день;
+    ///   победа  — трофеи (броня и оружие) → следующий день; пережили daysToWin дней — победа,
+    ///             но набеги идут дальше (бесконечный режим), пока стоит ратуша;
     ///   поражение — уцелевшие варвары бьют по зданиям и уходят → следующий день.
     /// Здоровья у города нет — есть прочность зданий. Разрушена ратуша — забег окончен.
     /// </summary>
@@ -69,6 +70,12 @@ namespace Casiwar
         public Color tabActiveColor = new Color(0.36f, 0.42f, 0.56f);
         public Color tabIdleColor = new Color(0.20f, 0.22f, 0.29f);
 
+        [Header("Подсветка «сюда стоит нажать» (пусто — кнопки найдутся сами)")]
+        [Tooltip("«В БОЙ!» — пульсирует, когда на поле больше ничего не сделать")]
+        public Button fightButton;
+        [Tooltip("«Дальше» на трофеях — пульсирует, когда крутки кончились")]
+        public Button lootNextButton;
+
         [Header("HUD (необязательно)")]
         public TMP_Text dayText;
         public TMP_Text goldText;
@@ -81,8 +88,8 @@ namespace Casiwar
         public TMP_Text gameOverText;
 
         [Header("Забег (стартовые ресурсы — в CityManager)")]
-        [Tooltip("Сколько дней нужно продержаться, чтобы пройти забег")]
-        [Min(1)] public int daysToWin = 12;
+        [Tooltip("Сколько дней нужно продержаться, чтобы победить; дальше набеги идут без конца (бесконечный режим)")]
+        [Min(1)] public int daysToWin = 20;
         [Tooltip("Юниты, с которыми игрок начинает забег")]
         public List<UnitData> startingUnits = new List<UnitData>();
 
@@ -115,6 +122,23 @@ namespace Casiwar
             if (lootSlot != null) lootSlot.Finished += OnLootFinished;
             if (city != null) city.Changed += OnCityChanged;
             ArrangeTabs();
+            FindProgressButtons();
+        }
+
+        /// <summary>Кнопки «В БОЙ!» и «Дальше» — по их обработчику (сцены старой версии не знают этих полей).</summary>
+        private void FindProgressButtons()
+        {
+            if (fightButton != null && lootNextButton != null) return;
+            foreach (Button button in FindObjectsByType<Button>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                for (int i = 0; i < button.onClick.GetPersistentEventCount(); i++)
+                {
+                    if (button.onClick.GetPersistentTarget(i) != this) continue;
+                    string method = button.onClick.GetPersistentMethodName(i);
+                    if (method == nameof(StartBattle) && fightButton == null) fightButton = button;
+                    else if (method == nameof(FinishLoot) && lootNextButton == null) lootNextButton = button;
+                }
+            }
         }
 
         /// <summary>Порядок вкладок «Город, Наука, Поле, Войска» — и в сценах, собранных старой версией.</summary>
@@ -133,6 +157,28 @@ namespace Casiwar
         private void Update()
         {
             if (messages.RemoveAll(m => Time.time > m.until) > 0) RefreshMessages();
+            UpdateProgressHighlights();
+        }
+
+        /// <summary>«Можно идти дальше»: «В БОЙ!» — когда на поле больше ничего не сделать, «Дальше» — когда крутки кончились.</summary>
+        private void UpdateProgressHighlights()
+        {
+            bool fight = Phase == GamePhase.Preparation && cityGrid != null && cityGrid.IsExhausted && !cityGrid.IsBusy;
+            bool next = Phase == GamePhase.Loot && lootSlot != null && lootSlot.SpinsLeft <= 0 && !lootSlot.IsSpinning;
+            if (fightButton != null) AttentionPulse.Set(fightButton.targetGraphic, fight);
+            if (lootNextButton != null) AttentionPulse.Set(lootNextButton.targetGraphic, next);
+        }
+
+        /// <summary>Вкладки, где можно что-то купить: «Город» — улучшения зданий, «Войска» — гильдий, «Наука» — хватает на технологию.</summary>
+        private void RefreshTabHighlights()
+        {
+            if (city == null) return;
+            bool prep = Phase == GamePhase.Preparation;
+            AttentionPulse.Set(cityTabButton, prep && Tab != PrepTab.City && city.AnyUpgradeNow(guilds: false));
+            AttentionPulse.Set(unitsTabButton, prep && Tab != PrepTab.Units && city.AnyUpgradeNow(guilds: true));
+            AttentionPulse.Set(techTabButton, prep && Tab != PrepTab.Tech && techTree != null &&
+                                              techTree.techs.Any(t => t != null && !techTree.IsResearched(t.id) && techTree.PrerequisitesMet(t)
+                                                                      && city.Knowledge >= t.knowledgeCost));
         }
 
         // =====================================================================
@@ -190,6 +236,7 @@ namespace Casiwar
             if (techTabButton != null) techTabButton.color = tab == PrepTab.Tech ? tabActiveColor : tabIdleColor;
             if (unitsTabButton != null) unitsTabButton.color = tab == PrepTab.Units ? tabActiveColor : tabIdleColor;
             if (benchPanel != null) benchPanel.SetActive(Phase == GamePhase.Loot || (Phase == GamePhase.Preparation && tab == PrepTab.Board));
+            RefreshTabHighlights();
         }
 
         /// <summary>Изучить технологию за очки знаний (кнопка в дереве науки).</summary>
@@ -259,10 +306,10 @@ namespace Casiwar
                 AddGold(reward);
                 ShowMessage($"Набег отбит! +{reward} {GameVisuals.IconGold}", 3.5f);
                 ShowMessage(report, 6f);
-                if (Day >= daysToWin)
+                if (Day == daysToWin)
                 {
-                    EndRun($"ПОБЕДА!\n\nГород пережил {daysToWin} дней набегов");
-                    return;
+                    // Победа засчитана, но забег не кончается: набеги идут дальше, пока стоит ратуша
+                    ShowMessage($"ПОБЕДА! Город пережил {daysToWin} дней набегов. Дальше — бесконечный режим: сколько ещё продержитесь?", 8f);
                 }
                 EnterLoot(outcome.SurvivorStars);
                 return;
@@ -274,7 +321,9 @@ namespace Casiwar
             ShowMessage(report, 6f);
             if (city != null && city.IsTownHallRuined)
             {
-                EndRun($"РАТУША РАЗРУШЕНА\n\nГород пал на {Day}-й день");
+                EndRun(Day > daysToWin
+                    ? $"РАТУША РАЗРУШЕНА\n\nПобеда была на {daysToWin}-й день, а город продержался до {Day}-го"
+                    : $"РАТУША РАЗРУШЕНА\n\nГород пал на {Day}-й день");
                 return;
             }
             NextDay();
@@ -344,6 +393,7 @@ namespace Casiwar
         private void OnCityChanged()
         {
             UpdateHud();
+            RefreshTabHighlights();
             // Новое здание с классом (казармы, святилище) — сразу видно на поле в оставшихся символах
         }
 
@@ -383,11 +433,12 @@ namespace Casiwar
             if (lootScreen != null) lootScreen.SetActive(Phase == GamePhase.Loot);
             if (gameOverScreen != null) gameOverScreen.SetActive(Phase == GamePhase.GameOver);
             if (benchPanel != null) benchPanel.SetActive(Phase == GamePhase.Loot || (Phase == GamePhase.Preparation && Tab == PrepTab.Board));
+            RefreshTabHighlights();
         }
 
         private void UpdateHud()
         {
-            if (dayText != null) dayText.text = $"День {Day}/{daysToWin}";
+            if (dayText != null) dayText.text = Day <= daysToWin ? $"День {Day}/{daysToWin}" : $"День {Day} · сверх победы";
             if (goldText != null) goldText.text = $"{GameVisuals.IconGold} {Gold}";
             if (city == null) return;
             if (productionText != null) productionText.text = $"{GameVisuals.IconProduction} {city.Production}";

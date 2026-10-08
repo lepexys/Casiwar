@@ -114,7 +114,7 @@ namespace Casiwar
         {
             switch (unitClass)
             {
-                case UnitClass.Warrior: return "Стена щитов";
+                case UnitClass.Warrior: return "Таран щитом";
                 case UnitClass.Archer: return "Залп";
                 case UnitClass.Priest: return "Молитва";
                 case UnitClass.Bomber: return "Динамит";

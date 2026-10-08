@@ -119,6 +119,8 @@ namespace Casiwar
     ///  5. Изучены «Былины» (Rules.AnyMixLength = 5): линия из 5+ ЛЮБЫХ юнитов подряд — тоже линия (богатырь).
     ///  6. Если линии претендуют на одни клетки, побеждает более длинная (при равной — классовая).
     ///  7. Пустые клетки (запас символов кончился) рвут линию.
+    ///  8. Ход — обмен двух соседних фишек или сдвиг фишки вбок в соседнюю пустую клетку:
+    ///     после сдвига фишки падают вниз (и та, что сдвинулась, и те, что стояли над ней).
     ///
     /// Координаты: x — столбец (слева направо), y — строка (сверху вниз), grid[x, y]; null — пустая клетка.
     /// </summary>
@@ -129,7 +131,7 @@ namespace Casiwar
         /// <summary>Что сейчас разрешено смешивать (поле города обновляет при изучении науки).</summary>
         public static LineRules Rules = new LineRules();
 
-        /// <summary>Возможный ход (обмен двух соседних фишек) и его оценка.</summary>
+        /// <summary>Возможный ход (обмен двух соседних фишек или сдвиг в пустую клетку) и его оценка.</summary>
         public struct Move
         {
             public Vector2Int A;
@@ -279,11 +281,11 @@ namespace Casiwar
                     var a = new Vector2Int(x, y);
                     foreach (Vector2Int b in new[] { new Vector2Int(x + 1, y), new Vector2Int(x, y + 1) })
                     {
-                        if (!InBounds(grid, b) || Get(grid, a) == null || Get(grid, b) == null || SameSymbol(Get(grid, a), Get(grid, b))) continue;
-                        Swap(grid, a, b);
+                        if (!IsMove(grid, a, b)) continue;
+                        if (Get(grid, a) != null && Get(grid, b) != null && SameSymbol(Get(grid, a), Get(grid, b))) continue;
+                        TileData[,] after = AfterMove(grid, a, b);
                         Move next = default;
-                        bool setup = FindMatches(grid).Count == 0 && TryFindBestMove(grid, priority, out next);
-                        Swap(grid, a, b);
+                        bool setup = FindMatches(after).Count == 0 && TryFindBestMove(after, priority, out next);
                         if (setup && (!found || next.Score > best.Score))
                         {
                             best = new Move { A = a, B = b, Score = next.Score, HitsPriority = next.HitsPriority };
@@ -308,12 +310,17 @@ namespace Casiwar
             var resources = new Dictionary<ResourceType, int>();
             var items = new Dictionary<ItemData, int>();
             bool roomForLine = false;
+            bool hasEmpty = false;
             for (int x = 0; x < width; x++)
             {
                 for (int y = 0; y < height; y++)
                 {
                     TileData tile = grid[x, y];
-                    if (tile == null) continue;
+                    if (tile == null)
+                    {
+                        hasEmpty = true; // фишки можно сдвигать в пустые клетки — сложить линию можно где угодно
+                        continue;
+                    }
                     if ((x + 2 < width && grid[x + 1, y] != null && grid[x + 2, y] != null) ||
                         (y + 2 < height && grid[x, y + 1] != null && grid[x, y + 2] != null))
                         roomForLine = true;
@@ -324,7 +331,7 @@ namespace Casiwar
                     else if (tile.IsUnit) classes[tile.Class] = classes.TryGetValue(tile.Class, out int c) ? c + 1 : 1;
                 }
             }
-            if (!roomForLine) return false;
+            if (!roomForLine && !(hasEmpty && height >= MinMatch)) return false;
             if (neutrals >= MinMatch || resources.Values.Any(n => n >= MinMatch) || items.Values.Any(n => n >= MinMatch)
                 || classes.Values.Any(n => n + neutrals >= MinMatch))
                 return true;
@@ -354,6 +361,53 @@ namespace Casiwar
             TileData tmp = grid[a.x, a.y];
             grid[a.x, a.y] = grid[b.x, b.y];
             grid[b.x, b.y] = tmp;
+        }
+
+        /// <summary>
+        /// Можно ли так походить: две соседние клетки, и либо обе с фишками (обмен), либо одна пустая
+        /// и она сбоку (сдвиг; вверх-вниз бессмысленно — фишка упадёт обратно).
+        /// </summary>
+        public static bool IsMove(TileData[,] grid, Vector2Int a, Vector2Int b)
+        {
+            if (!InBounds(grid, a) || !InBounds(grid, b) || Mathf.Abs(a.x - b.x) + Mathf.Abs(a.y - b.y) != 1) return false;
+            TileData first = Get(grid, a);
+            TileData second = Get(grid, b);
+            if (first == null && second == null) return false;
+            return (first != null && second != null) || a.y == b.y;
+        }
+
+        /// <summary>Сдвиг в пустую клетку (а не обмен двух фишек).</summary>
+        public static bool IsSlide(TileData[,] grid, Vector2Int a, Vector2Int b) => Get(grid, a) == null || Get(grid, b) == null;
+
+        /// <summary>Поле после хода (копия): обмен, а у сдвига — ещё и падение фишек в обеих колонках.</summary>
+        public static TileData[,] AfterMove(TileData[,] grid, Vector2Int a, Vector2Int b)
+        {
+            var copy = (TileData[,])grid.Clone();
+            bool slide = IsSlide(copy, a, b);
+            Swap(copy, a, b);
+            if (slide)
+            {
+                DropColumn(copy, a.x);
+                DropColumn(copy, b.x);
+            }
+            return copy;
+        }
+
+        /// <summary>Гравитация в колонке без досыпания: фишки падают вниз, пустые клетки уходят наверх.</summary>
+        public static void DropColumn(TileData[,] grid, int x)
+        {
+            int height = grid.GetLength(1);
+            int write = height - 1;
+            for (int y = height - 1; y >= 0; y--)
+            {
+                if (grid[x, y] == null) continue;
+                if (y != write)
+                {
+                    grid[x, write] = grid[x, y];
+                    grid[x, y] = null;
+                }
+                write--;
+            }
         }
 
         // ---------- Внутреннее ----------
@@ -418,11 +472,19 @@ namespace Casiwar
 
         private static void EvaluateMove(TileData[,] grid, UnitClass priority, Vector2Int a, Vector2Int b, ref Move best, ref bool found)
         {
-            if (!InBounds(grid, b) || Get(grid, a) == null || Get(grid, b) == null) return;
+            if (!IsMove(grid, a, b)) return;
 
-            Swap(grid, a, b);
-            List<MatchRun> runs = FindMatches(grid, priority);
-            Swap(grid, a, b); // откат пробного хода
+            List<MatchRun> runs;
+            if (IsSlide(grid, a, b))
+            {
+                runs = FindMatches(AfterMove(grid, a, b), priority);
+            }
+            else
+            {
+                Swap(grid, a, b);
+                runs = FindMatches(grid, priority);
+                Swap(grid, a, b); // откат пробного хода
+            }
             if (runs.Count == 0) return;
 
             int score = 0;

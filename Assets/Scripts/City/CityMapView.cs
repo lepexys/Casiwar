@@ -208,7 +208,7 @@ namespace Casiwar
                 string note = building.Type == BuildingType.House && !building.IsRuined
                     ? $"{GameVisuals.IconPopulation}{city.ResidentsIn(building)}"
                     : null;
-                view.Bind(building, building.Cell == selected, note);
+                view.Bind(building, building.Cell == selected, note, city.CanUpgradeNow(building));
             }
             for (int i = index; i < buildingViews.Count; i++) buildingViews[i].gameObject.SetActive(false);
         }
@@ -255,13 +255,18 @@ namespace Casiwar
                 }
                 if (!city.InTerritory(selected))
                 {
-                    SetPanel(terrainName, "Вне границ города: строить можно только внутри золотой рамки.\nГраницы расширяются, когда городу не хватает места для домов.");
+                    SetPanel(terrainName, "Вне границ города: строить можно только внутри золотой рамки.\n" +
+                                          $"Границы расширяются сами, когда городу не хватает места для домов, или за {GameVisuals.IconProduction} в ратуше.");
+                    AddBorderAction();
                     return;
                 }
-                SetPanel($"{terrainName} · пустая клетка", "Что здесь построить? Новые здания открывает наука.");
-                foreach (BuildingConfig config in city.buildings.Where(c => c != null && c.buildable))
+                SetPanel($"{terrainName} · пустая клетка", "Что здесь построить? Новые здания и чудеса света открывает наука.");
+                // Сначала то, что можно построить сейчас, потом — на что не хватает ⚒, в конце — что ещё закрыто наукой
+                IEnumerable<BuildingConfig> buildable = city.buildings
+                    .Where(c => c != null && c.buildable && !(c.unique && city.Buildings.Any(b => b.Type == c.type)))
+                    .OrderBy(c => city.WhyCannotBuild(c, selected) == null ? 0 : city.IsUnlocked(c) ? 1 : 2);
+                foreach (BuildingConfig config in buildable.ToList())
                 {
-                    if (config.unique && city.Buildings.Any(b => b.Type == config.type)) continue;
                     string reason = city.WhyCannotBuild(config, selected);
                     string label = $"{config.title} · {config.productionCost} {GameVisuals.IconProduction}";
                     if (reason != null && !city.IsUnlocked(config)) label = $"{config.title} — {reason}";
@@ -279,6 +284,12 @@ namespace Casiwar
                 AddAction($"Улучшения отряда → «Войска» ({building.Upgrades.Count}/{building.Config.upgrades.Count})", true,
                     () => { if (game != null) game.ShowUnitsTab(); });
             }
+            if (building.Type == BuildingType.TownHall) AddBorderAction();
+            if (building.Type == BuildingType.Bazaar)
+            {
+                AddAction($"Караван: {city.caravanProduction} {GameVisuals.IconProduction} → {city.caravanGold} {GameVisuals.IconGold}",
+                    city.WhyCannotSendCaravan() == null, () => Report(city.TrySendCaravan(out string message), message));
+            }
             if (building.IsDamaged)
             {
                 AddAction($"Починить · {city.RepairCost(building)} {GameVisuals.IconProduction}",
@@ -291,9 +302,10 @@ namespace Casiwar
                 if (building.Upgrades.Contains(upgrade.id)) continue;
                 string reason = city.WhyCannotUpgrade(building, upgrade);
                 // Не хватает только золота — цена и так на кнопке; иначе пишем, что мешает (наука, руины)
-                bool onlyGold = reason == null || (city.Gold < upgrade.goldCost && reason.StartsWith("Нужно "));
+                int cost = city.UpgradeCost(building, upgrade);
+                bool onlyGold = reason == null || (city.Gold < cost && reason.StartsWith("Нужно "));
                 string label = onlyGold
-                    ? $"{upgrade.title}: {upgrade.description} · {upgrade.goldCost} {GameVisuals.IconGold}"
+                    ? $"{upgrade.title}: {upgrade.description} · {cost} {GameVisuals.IconGold}"
                     : $"{upgrade.title} — {reason}";
                 string id = upgrade.id;
                 AddAction(label, reason == null, () => Report(city.TryUpgrade(building, id, out string message), message));
@@ -311,10 +323,22 @@ namespace Casiwar
             if (panelInfo != null) panelInfo.text = info;
         }
 
+        /// <summary>«Расширить границы» за ⚒ (в ратуше и на клетках за рамкой), пока они не самые широкие.</summary>
+        private void AddBorderAction()
+        {
+            if (city.TerritoryRadius >= city.maxCityRadius) return;
+            int border = (city.TerritoryRadius + 1) * 2 + 1;
+            AddAction($"Расширить границы до {border}×{border} · {city.BorderExpansionCost} {GameVisuals.IconProduction}",
+                city.WhyCannotExpandBorders() == null, () => Report(city.TryExpandBorders(out string message), message));
+        }
+
         private void ClearActions()
         {
             if (actionsContainer == null) return;
             for (int i = actionsContainer.childCount - 1; i >= 0; i--) Destroy(actionsContainer.GetChild(i).gameObject);
+            // Список действий прокручивается — новое здание показываем с начала
+            ScrollRect scroll = actionsContainer.GetComponentInParent<ScrollRect>();
+            if (scroll != null) scroll.verticalNormalizedPosition = 1f;
         }
 
         private void AddAction(string label, bool interactable, UnityAction onClick)

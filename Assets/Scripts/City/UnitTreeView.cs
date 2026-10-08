@@ -106,8 +106,8 @@ namespace Casiwar
             if (!isActiveAndEnabled || city == null) return;
             if (summaryText != null)
             {
-                summaryText.text = $"Золото: {city.Gold} {GameVisuals.IconGold} · улучшения отрядов работают, пока цела их гильдия.\n" +
-                                   "Ключ яруса (щиты, арбалеты, посохи) открывает следующий ярус: нужна его наука и 2 улучшения яруса";
+                summaryText.text = $"Золото: {city.Gold} {GameVisuals.IconGold} · улучшения работают, пока цела гильдия; чем глубже в ветке, тем дороже.\n" +
+                                   "Ключ яруса (щиты, арбалеты, посохи) открывает следующий ярус. Монахи и богатырь — в казармах, подрывники — на стрельбище, маги — в святилище";
             }
 
             for (int i = 0; i < Branches.Length && i < columnStatus.Length; i++)
@@ -135,8 +135,9 @@ namespace Casiwar
                 }
                 bool bought = guild.Upgrades.Contains(upgrade.id);
                 string reason = bought ? null : city.WhyCannotUpgrade(guild, upgrade);
-                bool onlyGold = reason != null && city.Gold < upgrade.goldCost && reason.StartsWith("Нужно ") && reason.Contains(GameVisuals.IconGold);
-                card.Bind(upgrade, bought, reason, onlyGold);
+                int cost = city.UpgradeCost(guild, upgrade);
+                bool onlyGold = reason != null && city.Gold < cost && reason.StartsWith("Нужно ") && reason.Contains(GameVisuals.IconGold);
+                card.Bind(upgrade, bought, reason, onlyGold, cost);
             }
         }
     }

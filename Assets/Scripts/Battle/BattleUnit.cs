@@ -21,7 +21,9 @@ namespace Casiwar
     ///   AttackAction (символы ⚔): удар по цели в радиусе; жрец вместо удара лечит раненого рядом.
     /// У юнита есть «лицо» (Facing): удар в спину сильнее. Воин со щитом (щиты изучаются) ловит удары
     /// в лицо — иногда целиком, иногда частично, иногда щит не помогает; ростовой щит прикрывает и бок.
-    /// Перемещение — только шагами (не дальше MoveSpeed клеток за действие), телепортов нет.
+    /// Перемещение — только шагами (не дальше MoveSpeed клеток за действие), телепортов нет;
+    /// «Рывок» воина — быстрый бросок по свободным клеткам (до нескольких клеток), тоже без телепорта.
+    /// Оглушённый (таран щитом) пропускает свои ходы: не бьёт, не ходит и не участвует в навыках.
     /// Визуал строится кодом: тело, подставка цвета команды, стрелка взгляда, щит, полоска ХП,
     /// цифра уровня и звёзды-точки под юнитом (★★ и ★★★ ещё и крупнее).
     /// </summary>
@@ -31,7 +33,7 @@ namespace Casiwar
         private const float WoundedShare = 0.75f; // жрец лечит тех, у кого меньше 75% ХП
         private static readonly Color HitColor = new Color(1f, 0.35f, 0.35f);
         private static readonly Color ShieldColor = new Color(0.64f, 0.70f, 0.80f);
-        private static readonly Color ShieldWallColor = new Color(0.45f, 0.80f, 1f);
+        private static readonly Color StunColor = new Color(1f, 0.88f, 0.30f, 0.95f);
         private static readonly Color BlessColor = new Color(1f, 0.92f, 0.55f);
         private static readonly Color HealColor = new Color(0.45f, 1f, 0.55f);
 
@@ -52,6 +54,8 @@ namespace Casiwar
         public float Hp { get; private set; }
         public float AttackDamage { get; private set; }
         public float HealPower { get; private set; }
+        /// <summary>«Живая вода» богатыря: доля ХП, которую он восстанавливает после своего действия.</summary>
+        public float RegenShare { get; private set; }
         public int Armor { get; private set; }
         public int AttackRange { get; private set; }
         public int MoveSpeed { get; private set; }
@@ -69,19 +73,17 @@ namespace Casiwar
         public bool IsDead => Hp <= 0f;
         public bool IsWounded => !IsDead && Hp < MaxHp * WoundedShare;
         public BattleUnit CurrentTarget { get; private set; }
-        public bool IsShieldWall => battle != null && battle.CurrentStep <= shieldWallUntilStep;
-        /// <summary>Прибавка к шансу полного блока, пока держится стена щитов.</summary>
-        public float ShieldWallBonus => IsShieldWall ? shieldWallBonus : 0f;
-        /// <summary>Место в строю (навык воинов): к нему юнит идёт шагами.</summary>
-        public Vector2Int? FormationCell { get; private set; }
+        /// <summary>Оглушён (таран щитом): пропускает свои ходы — не бьёт, не ходит, в навыках не участвует.</summary>
+        public bool IsStunned => stunTurns > 0;
         public bool IsBlessed => battle != null && battle.CurrentStep <= blessUntilStep;
         /// <summary>«Огненные клинки» монахов: удары ближнего боя сильнее.</summary>
         public bool IsOnFire => battle != null && battle.CurrentStep <= fireUntilStep;
         public Vector2 Position => transform.position;
 
         private AutoBattleManager battle;
-        private int shieldWallUntilStep = -1;
-        private float shieldWallBonus;
+        private int stunTurns;
+        private float chargeMultiplier = 1f; // «Рывок»: следующий удар сильнее
+        private int chargeStun;              // «Таран щитом»: следующий удар оглушает на столько ходов цели
         private int blessUntilStep = -1;
         private float blessReduction;
         private int fireUntilStep = -1;
@@ -95,9 +97,11 @@ namespace Casiwar
         private SpriteRenderer shield;
         private SpriteRenderer blessRing;
         private SpriteRenderer fireRing;
+        private SpriteRenderer stunMark;
         private SpriteRenderer hpBack;
         private SpriteRenderer hpFill;
         private readonly List<SpriteRenderer> starDots = new List<SpriteRenderer>();
+        private readonly List<SpriteRenderer> hpTicks = new List<SpriteRenderer>();
         private TextMeshPro levelLabel;
         private Color bodyColor;
         private float bodyRadius;
@@ -133,6 +137,17 @@ namespace Casiwar
             MoveSpeed = Mathf.Max(1, Data.moveSpeed);
             ShieldLevel = Data.shieldBearer ? Mathf.Clamp(shieldLevel, 0, 2) : 0;
             ShieldBonus = ShieldLevel > 0 ? Mathf.Max(0f, shieldBonus) : 0f;
+            RegenShare = 0f;
+            if (source.IsHero)
+            {
+                HeroTraits hero = source.hero;
+                MaxHp *= hero.HpMultiplier;
+                Hp = MaxHp;
+                AttackDamage = Data.GetAttack(Stars, Level) * statMultiplier * hero.AttackMultiplier + source.ItemAttack;
+                Armor += hero.BonusArmor;
+                AttackRange = hero.Range(AttackRange);
+                RegenShare = hero.RegenShare;
+            }
             PiercesShields = piercesShields && AttackRange > 1;
             BackstabMultiplier = Mathf.Max(1f, Data.backstabMultiplier);
             Flanker = Data.flanker;
@@ -151,8 +166,7 @@ namespace Casiwar
         /// <summary>Нужно ли юниту идти (нет цели в радиусе; жрецу — раненый союзник далеко).</summary>
         public bool WantsToMove()
         {
-            if (IsDead) return false;
-            if (IsShieldWall) return FormationCell.HasValue && FormationCell.Value != Cell; // строй: идём к своему месту и стоим
+            if (IsDead || IsStunned) return false;
             if (IsHealer)
             {
                 BattleUnit patient = battle.FindMostWounded(this);
@@ -167,7 +181,7 @@ namespace Casiwar
         /// <summary>Может ли юнит что-то сделать по символу ⚔ (ударить или вылечить).</summary>
         public bool HasTargetInRange()
         {
-            if (IsDead) return false;
+            if (IsDead || IsStunned) return false;
             if (IsHealer)
             {
                 BattleUnit patient = battle.FindMostWounded(this);
@@ -180,12 +194,7 @@ namespace Casiwar
         /// <summary>Символ ➜: шаг к цели (жрец — к раненому союзнику).</summary>
         public void MoveAction()
         {
-            if (IsDead) return;
-            if (IsShieldWall && FormationCell.HasValue)
-            {
-                StepTowardsFormation();
-                return;
-            }
+            if (IsDead || IsStunned) return;
             Vector2Int? destination;
             BattleUnit patient = IsHealer ? battle.FindMostWounded(this) : null;
             if (patient != null && !InHealRange(patient))
@@ -212,7 +221,7 @@ namespace Casiwar
         /// </summary>
         public void AttackAction(float power = 1f)
         {
-            if (IsDead) return;
+            if (IsDead || IsStunned) return;
             if (IsHealer)
             {
                 BattleUnit patient = battle.FindMostWounded(this);
@@ -236,6 +245,14 @@ namespace Casiwar
 
             HitSide side = AutoBattleManager.SideOf(target, Cell);
             float damage = AttackDamage * multiplier;
+            // «Рывок» воина: накопленный разгон уходит в этот удар (со щитом — ещё и оглушает)
+            float charge = chargeMultiplier;
+            int stun = chargeStun;
+            chargeMultiplier = 1f;
+            chargeStun = 0;
+            damage *= charge;
+            if (charge >= 1.25f)
+                BattleVfx.FloatingText(Position + Vector2.up * 0.45f, $"РЫВОК ×{charge:0.#}", new Color(0.7f, 0.9f, 1f), 2.6f);
             if (IsOnFire && AttackRange <= 1) damage *= 1f + fireBonus; // «Огненные клинки»
             if (side == HitSide.Back) damage *= BackstabMultiplier;
             else if (side == HitSide.Side) damage *= 1f + (BackstabMultiplier - 1f) * battle.sideBonusShare;
@@ -266,6 +283,7 @@ namespace Casiwar
             }
             target.TakeDamage(damage, this);
             if (target.IsDead) Kills++;
+            else if (stun > 0) target.Stun(stun);
             if (unitClass == UnitClass.Bomber)
             {
                 // Шашка взрывается: задевает врагов рядом с целью
@@ -302,7 +320,6 @@ namespace Casiwar
                 amount *= 1f - blocked;
                 ShowShieldText($"щит −{Mathf.RoundToInt(blocked * 100f)}%");
             }
-            if (IsShieldWall && ShieldLevel == 0) amount *= 1f - battle.formationReduction; // плотный строй без щитов
             if (IsBlessed) amount *= 1f - blessReduction;
             if (!ignoreArmor) amount *= 100f / (100f + Mathf.Max(0, Armor)); // броня
 
@@ -344,25 +361,50 @@ namespace Casiwar
             moveDuration = fast ? 0.1f : 0.22f;
         }
 
-        /// <summary>Навык воинов: держать строй до шага untilStep на месте slot; щиты блокируют чаще на bonus.</summary>
-        public void ApplyShieldWall(int untilStep, Vector2Int? slot, float bonus)
+        /// <summary>
+        /// «Рывок» воина: бросок к ближайшему врагу по свободным клеткам (не дальше range). Чем дальше пролетел,
+        /// тем сильнее удар — +bonusPerCell за клетку (× power навыка). Достал цель — бьёт сразу,
+        /// не достал — разгон копится до следующего удара. stun > 0 (у воинов щиты) — это таран щитом:
+        /// удар оглушает цель на stun её ходов.
+        /// </summary>
+        public void Charge(float power, int range, float bonusPerCell, int stun)
         {
-            shieldWallUntilStep = Mathf.Max(shieldWallUntilStep, untilStep);
-            shieldWallBonus = Mathf.Clamp01(bonus);
-            FormationCell = slot;
+            if (IsDead || IsStunned) return;
+            BattleUnit target = battle.FindNearestEnemy(this);
+            if (target == null) return;
+            CurrentTarget = target;
+
+            int cells = 0;
+            if (!InRange(target))
+            {
+                List<Vector2Int> path = battle.FindPath(Cell, c => AutoBattleManager.Distance(c, target.Cell) <= AttackRange);
+                if (path != null && path.Count > 0)
+                {
+                    cells = Mathf.Min(Mathf.Max(1, range), path.Count);
+                    Vector2Int from = Cell;
+                    Vector2 start = Position;
+                    battle.Relocate(this, path[cells - 1], fast: true);
+                    Facing = AutoBattleManager.DirectionBetween(from, Cell);
+                    BattleVfx.Bolt(start, battle.CellToWorld(Cell), new Color(0.8f, 0.9f, 1f, 0.55f), 0.14f, 0.25f); // след рывка
+                }
+            }
+            chargeMultiplier = Mathf.Max(chargeMultiplier, Mathf.Max(1f, power) * (1f + bonusPerCell * cells));
+            chargeStun = Mathf.Max(chargeStun, stun);
+            if (InRange(target)) Attack(target, 1f);
         }
 
-        /// <summary>Шаг к своему месту в строю (не дальше MoveSpeed клеток — без телепорта) и разворот щитом к врагу.</summary>
-        public void StepTowardsFormation()
+        /// <summary>Оглушить: юнит пропустит столько своих ходов.</summary>
+        public void Stun(int turns)
         {
-            if (IsDead) return;
-            if (FormationCell.HasValue && FormationCell.Value != Cell)
-            {
-                Vector2Int slot = FormationCell.Value;
-                Vector2Int? step = PathStep(c => c == slot, slot);
-                if (step.HasValue && step.Value != Cell) battle.Relocate(this, step.Value);
-            }
-            Facing = AutoBattleManager.Forward(Team);
+            if (IsDead || turns <= 0) return;
+            stunTurns = Mathf.Max(stunTurns, turns);
+            BattleVfx.FloatingText(Position + Vector2.up * 0.6f, turns > 1 ? $"ОГЛУШЁН ×{turns}" : "ОГЛУШЁН", StunColor, 2.6f);
+        }
+
+        /// <summary>Ход стороны юнита закончился: оглушение проходит на один ход.</summary>
+        public void EndOwnTurn()
+        {
+            if (stunTurns > 0) stunTurns--;
         }
 
         private void ShowShieldText(string text)
@@ -457,8 +499,10 @@ namespace Casiwar
             facingMark.enabled = false;
             blessRing.enabled = false;
             fireRing.enabled = false;
+            stunMark.enabled = false;
             if (shield != null) shield.enabled = false;
             foreach (SpriteRenderer dot in starDots) dot.enabled = false;
+            foreach (SpriteRenderer tick in hpTicks) tick.enabled = false;
             if (levelLabel != null) levelLabel.enabled = false;
             StartCoroutine(DeathRoutine());
         }
@@ -526,8 +570,22 @@ namespace Casiwar
             hpFill = CreatePart("HpFill", GameVisuals.Square,
                 Team == Team.Player ? new Color(0.35f, 0.9f, 0.4f) : new Color(0.95f, 0.3f, 0.25f),
                 new Vector2(0f, barY), new Vector2(barWidth, 0.06f));
+            // Деления на полоске ХП: каждое — 100 ХП (у толстых — 250/500/1000), крупные — каждые 1000
+            float tickStep = HpTickStep(MaxHp);
+            for (int i = 1; i * tickStep < MaxHp - 1f; i++)
+            {
+                float hp = i * tickStep;
+                bool major = tickStep < 1000f && Mathf.Approximately(hp % 1000f, 0f);
+                float x = -barWidth * 0.5f + barWidth * (hp / MaxHp);
+                hpTicks.Add(CreatePart("HpTick", GameVisuals.Square, new Color(0f, 0f, 0f, major ? 0.95f : 0.7f),
+                    new Vector2(x, barY), new Vector2(major ? 0.02f : 0.012f, major ? 0.09f : 0.06f)));
+            }
             levelLabel = CreateLabel("Level", new Vector2(-barWidth * 0.5f - 0.09f, barY), 2f, new Color(1f, 0.85f, 0.25f), new Vector2(0.3f, 0.25f));
             levelLabel.text = Level.ToString();
+
+            // Оглушение: жёлтое кольцо над полоской ХП
+            stunMark = CreatePart("Stun", GameVisuals.Ring, StunColor, new Vector2(0f, barY + 0.13f), new Vector2(diameter * 0.55f, diameter * 0.22f));
+            stunMark.enabled = false;
             if (Stars > 1)
             {
                 for (int i = 0; i < Stars; i++)
@@ -536,6 +594,16 @@ namespace Casiwar
                     starDots.Add(CreatePart("Star", GameVisuals.Circle, new Color(1f, 0.85f, 0.25f), new Vector2(x, -bodyRadius - 0.015f), new Vector2(0.07f, 0.07f)));
                 }
             }
+        }
+
+        /// <summary>Шаг делений полоски ХП: 100, а если делений выходит больше 15 — 250, 500 или 1000.</summary>
+        private static float HpTickStep(float maxHp)
+        {
+            foreach (float step in new[] { 100f, 250f, 500f })
+            {
+                if (maxHp / step <= 15f) return step;
+            }
+            return 1000f;
         }
 
         private TextMeshPro CreateLabel(string partName, Vector2 localPosition, float fontSize, Color color, Vector2 size)
@@ -589,9 +657,15 @@ namespace Casiwar
 
             // Вспышка при уроне
             if (flashTimer > 0f) flashTimer -= dt;
-            body.color = flashTimer > 0f ? HitColor : bodyColor;
+            body.color = flashTimer > 0f ? HitColor : IsStunned ? Color.Lerp(bodyColor, Color.gray, 0.5f) : bodyColor;
             blessRing.enabled = IsBlessed;
             fireRing.enabled = IsOnFire;
+            stunMark.enabled = IsStunned;
+            if (IsStunned)
+            {
+                float wobble = 1f + 0.15f * Mathf.Sin(Time.time * 8f);
+                stunMark.transform.localScale = new Vector3(bodyRadius * 1.1f * wobble, bodyRadius * 0.44f, 1f);
+            }
 
             // Стрелка взгляда и щит поворачиваются вслед за Facing
             Vector2 facing = ((Vector2)Facing).normalized;
@@ -600,13 +674,12 @@ namespace Casiwar
             facingMark.transform.localRotation = Quaternion.Euler(0f, 0f, angle - 90f);
             if (shield != null)
             {
-                bool wall = IsShieldWall;
                 bool tower = ShieldLevel >= 2;
-                float width = bodyRadius * (tower ? 1.9f : 1.5f) * (wall ? 1.3f : 1f);
-                shield.transform.localPosition = facing * (bodyRadius + (wall ? 0.1f : 0.06f));
+                float width = bodyRadius * (tower ? 1.9f : 1.5f);
+                shield.transform.localPosition = facing * (bodyRadius + 0.06f);
                 shield.transform.localRotation = Quaternion.Euler(0f, 0f, angle - 90f);
-                shield.transform.localScale = new Vector3(width, (tower ? 0.12f : 0.08f) * (wall ? 1.25f : 1f), 1f);
-                shield.color = wall ? ShieldWallColor : ShieldColor;
+                shield.transform.localScale = new Vector3(width, tower ? 0.12f : 0.08f, 1f);
+                shield.color = ShieldColor;
             }
 
             // Полоска ХП тает справа налево
@@ -621,12 +694,14 @@ namespace Casiwar
             teamBase.sortingOrder = -10000 + order;
             blessRing.sortingOrder = order - 1;
             fireRing.sortingOrder = order - 1;
+            stunMark.sortingOrder = order + 6;
             body.sortingOrder = order;
             facingMark.sortingOrder = order + 1;
             if (shield != null) shield.sortingOrder = order + 2;
             hpBack.sortingOrder = order + 3;
             hpFill.sortingOrder = order + 4;
             foreach (SpriteRenderer dot in starDots) dot.sortingOrder = order + 5;
+            foreach (SpriteRenderer tick in hpTicks) tick.sortingOrder = order + 5;
             if (levelLabel != null) levelLabel.sortingOrder = order + 5;
         }
     }

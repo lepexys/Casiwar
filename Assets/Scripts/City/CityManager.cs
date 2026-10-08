@@ -17,6 +17,14 @@ namespace Casiwar
         Workshop,     // мастерская: больше производства
         School,       // школа: больше очков знаний
         ArcheryRange, // стрельбище: гильдия дальнего боя (лучники)
+        // Чудеса света: уникальные дорогие постройки за ⚒ с сильным бонусом
+        Stonehenge,
+        Pyramids,
+        GreatWall,
+        Colossus,
+        Tiltyard,
+        GreatLibrary,
+        TerracottaArmy,
     }
 
     /// <summary>Что дают здания и улучшения.</summary>
@@ -40,7 +48,7 @@ namespace Casiwar
         ShieldLevel,         // щиты воинов: 1 — обычные, 2 — ростовые (берётся лучший, не сумма)
         Crossbows,           // луки стали арбалетами: болт пробивает щиты
         Reshuffles,          // перемешиваний поля в день (вера)
-        WarriorSkill,        // +сила «Стены щитов» / «Строя»
+        WarriorSkill,        // +сила «Рывка» / «Тарана щитом»
         ArcherSkill,         // +сила «Залпа»
         PriestSkill,           // +сила «Молитвы»
         ShieldBlockBonus,    // +шанс поймать удар щитом целиком
@@ -49,6 +57,15 @@ namespace Casiwar
         MultiplierValue,     // +1 к множителю (×2 → ×3)
         RelicSymbols,        // Свечи (3+ — «Чудо») в боевом слоте — уровень
         MiraclePower,        // +сила «Чуда»
+        BomberStats,         // +доля к ХП и атаке подрывников (сверху «родительских» гильдий)
+        MonkStats,           // +доля к ХП и атаке монахов
+        MageStats,           // +доля к ХП и атаке магов
+        HeroStats,           // +доля к ХП и атаке богатыря
+        BomberSkill,         // +сила «Динамита»
+        MonkSkill,           // +сила «Огненных клинков»
+        MageSkill,           // +сила «Цепной молнии»
+        ArmyStats,           // +доля к ХП и атаке всех отрядов (и ополченцев)
+        BattleXp,            // +опыта каждому выжившему за бой
     }
 
     [Serializable]
@@ -162,6 +179,8 @@ namespace Casiwar
     /// • жители каждый день едят; излишек еды растит население → поле и запас символов больше.
     ///   В доме живут 3 жителя; когда дома заполнены, новый дом ставится сам;
     /// • очки знаний приходят каждое утро — от жителей и ратуши, школа и библиотека их умножают;
+    /// • лишнее производство уходит в чудеса света (дорогие уникальные постройки с сильным бонусом),
+    ///   расширение границ в ратуше и караваны с базара (⚒ → 🪙);
     /// • у каждого здания есть прочность: после проигранного боя варвары бьют по зданиям.
     ///   Разрушенное здание не работает, пока его не починят. Разрушена ратуша — забег окончен.
     /// </summary>
@@ -180,17 +199,23 @@ namespace Casiwar
         public int worldSeed;
         [Tooltip("Границы города: радиус вокруг ратуши (2 → квадрат 5×5)")]
         [Min(1)] public int cityRadius = 2;
-        [Tooltip("До какого радиуса границы расширяются сами, когда новому дому не хватает места")]
-        [Min(1)] public int maxCityRadius = 4;
+        [Tooltip("До какого радиуса границы расширяются (сами — когда новому дому не хватает места, или за ⚒ в ратуше)")]
+        [Min(1)] public int maxCityRadius = 5;
+        [Tooltip("Расширить границы за производство в ратуше: цена = это × новый радиус")]
+        [Min(1)] public int borderCostPerRadius = 12;
+
+        [Header("Караваны с базара: лишнее производство → золото")]
+        [Min(1)] public int caravanProduction = 15;
+        [Min(0)] public int caravanGold = 5;
         public List<BuildingConfig> buildings = DefaultBuildings();
 
         [Header("Население и еда")]
         [Min(1)] public int startPopulation = 3;
-        [Tooltip("Еды на жителя в день")]
-        [Min(0)] public int foodPerCitizen = 1;
+        [Tooltip("Еды на жителя в день (всего округляется вверх)")]
+        [Min(0f)] public float foodPerCitizen = 1.5f;
         [Tooltip("Еды на рост = база + за каждого жителя")]
         [Min(1)] public int baseGrowthCost = 6;
-        [Min(0)] public int growthCostPerCitizen = 2;
+        [Min(0)] public int growthCostPerCitizen = 3;
 
         [Header("Поле города (растёт с населением)")]
         [Min(3)] public int baseBoardSize = 4;
@@ -216,8 +241,10 @@ namespace Casiwar
         [Min(0)] public int townHallKnowledge = 2;
 
         [Header("Действия на поле")]
-        [Tooltip("Удачных ходов на поле в день (позже будет зависеть от культуры)")]
+        [Tooltip("Ходов на поле в день при стартовом поле и запасе (позже будет зависеть от культуры)")]
         [Min(1)] public int actionsPerDay = 10;
+        [Tooltip("+1 ход за каждые N символов дня (поле + запас) сверх стартовых — чем больше город, тем больше ходов")]
+        [Min(1)] public int symbolsPerExtraAction = 5;
 
         [Header("Старт и ремонт")]
         [Tooltip("Еды на первое утро, чтобы город не голодал из-за неудачного первого поля")]
@@ -280,7 +307,7 @@ namespace Casiwar
                 new BuildingConfig
                 {
                     type = BuildingType.TownHall, title = "Ратуша", shortLabel = "РАТУША", color = new Color(0.78f, 0.62f, 0.32f),
-                    description = $"Сердце города: +2 {knowledge} в день. Разрушена — забег окончен.",
+                    description = $"Сердце города: +2 {knowledge} в день. Здесь же — расширение границ за {production}. Разрушена — забег окончен.",
                     maxHp = 120, buildable = false,
                     upgrades =
                     {
@@ -300,7 +327,7 @@ namespace Casiwar
                 new BuildingConfig
                 {
                     type = BuildingType.Bazaar, title = "Базар", shortLabel = "БАЗАР", color = new Color(0.95f, 0.75f, 0.25f),
-                    description = $"+1 {gold} с каждой монеты на поле.",
+                    description = $"+1 {gold} с каждой монеты на поле. Караваны меняют лишнее {production} на {gold}.",
                     maxHp = 60, buildable = false,
                     effects = { new EffectValue(CityEffect.GoldPerCoin, 1) },
                     upgrades =
@@ -312,75 +339,89 @@ namespace Casiwar
                 new BuildingConfig
                 {
                     type = BuildingType.Barracks, title = "Казармы", shortLabel = "КАЗАРМЫ", color = new Color(0.80f, 0.34f, 0.28f),
-                    description = "Гильдия ближнего боя: воины на поле. Прокачка воинов — на вкладке «Войска».",
+                    description = "Гильдия ближнего боя: воины на поле. Прокачка воинов, монахов и богатыря — на вкладке «Войска».",
                     requiresAnyTech = new[] { TechIds.Warfare }, productionCost = 5, maxHp = 80, unitBranch = UnitClass.Warrior,
                     effects = { new EffectValue(CityEffect.UnlockWarriors, 1) },
                     upgrades =
                     {
-                        new UpgradeConfig("drill", "Муштра", "«Строй» и «Стена щитов» на 30% сильнее", "", 4,
+                        new UpgradeConfig("drill", "Муштра", "«Рывок» воинов бьёт на 30% сильнее", "", 25,
                             new EffectValue(CityEffect.WarriorSkill, 0.3f)),
-                        new UpgradeConfig("bronze_weapons", "Бронзовые мечи", "Воины +20% ХП и атаки", TechIds.Bronze, 6,
+                        new UpgradeConfig("bronze_weapons", "Бронзовые мечи", "Воины +20% ХП и атаки", TechIds.Bronze, 30,
                             new EffectValue(CityEffect.WarriorStats, 0.2f)),
-                        new UpgradeConfig("banner", "Боевое знамя", $"В боевом слоте появляются Знамёна {banner} — джокеры", "", 6,
+                        new UpgradeConfig("banner", "Боевое знамя", $"В боевом слоте появляются Знамёна {banner}. Знамя — джокер: считается буквой любого кластера рядом, и навык срабатывает чаще и сильнее", "", 30,
                             new EffectValue(CityEffect.BannerSymbols, 1)),
-                        new UpgradeConfig("shields", "Щиты", "Воины берут щиты: удар в лицо иногда ловят целиком или частично", TechIds.Shields, 8,
+                        new UpgradeConfig("shields", "Щиты", "Воины берут щиты: ловят удары в лицо, а «Рывок» становится «Тараном щитом» — цель оглушена на ход", TechIds.Shields, 35,
                             new EffectValue(CityEffect.ShieldLevel, 1)) { gate = true },
-                        new UpgradeConfig("iron_rims", "Окованные щиты", "+10% к шансу поймать удар целиком", "", 7,
+                        new UpgradeConfig("iron_rims", "Окованные щиты", "+10% к шансу поймать удар целиком", "", 45,
                             new EffectValue(CityEffect.ShieldBlockBonus, 0.1f)) { tier = 2 },
-                        new UpgradeConfig("regiment_banners", "Знамёна полков", $"Знамён {banner} в слоте больше", "", 8,
+                        new UpgradeConfig("regiment_banners", "Знамёна полков", $"Знамён {banner} (джокеров) в боевом слоте выпадает больше", "", 50,
                             new EffectValue(CityEffect.BannerSymbols, 1)) { tier = 2 },
-                        new UpgradeConfig("tower_shields", "Ростовые щиты", "Блок чаще, щит прикрывает и бок", TechIds.TowerShields, 12,
+                        new UpgradeConfig("tower_shields", "Ростовые щиты", "Блок чаще, щит прикрывает и бок, таран оглушает на 2 хода", TechIds.TowerShields, 60,
                             new EffectValue(CityEffect.ShieldLevel, 2)) { tier = 2, gate = true },
-                        new UpgradeConfig("phalanx", "Фаланга", "Воины +25% ХП и атаки, стена щитов на 30% сильнее", "", 14,
+                        new UpgradeConfig("phalanx", "Фаланга", "Воины +25% ХП и атаки, «Рывок» на 30% сильнее", "", 70,
                             new EffectValue(CityEffect.WarriorStats, 0.25f), new EffectValue(CityEffect.WarriorSkill, 0.3f)) { tier = 3 },
+                        new UpgradeConfig("fist_school", "Школа кулака", "Монахи +30% ХП и атаки", TechIds.MartialArts, 75,
+                            new EffectValue(CityEffect.MonkStats, 0.3f)) { tier = 3 },
+                        new UpgradeConfig("inner_fire", "Внутренний огонь", "«Огненные клинки» монахов на 50% сильнее", TechIds.MartialArts, 80,
+                            new EffectValue(CityEffect.MonkSkill, 0.5f)) { tier = 3 },
+                        new UpgradeConfig("bogatyr_outpost", "Богатырская застава", "Богатырь +30% ХП и атаки", TechIds.Epics, 90,
+                            new EffectValue(CityEffect.HeroStats, 0.3f)) { tier = 3 },
                     },
                 },
                 new BuildingConfig
                 {
                     type = BuildingType.ArcheryRange, title = "Стрельбище", shortLabel = "СТРЕЛЬБ.", color = new Color(0.42f, 0.66f, 0.30f),
-                    description = "Гильдия дальнего боя: лучники на поле. Прокачка стрелков — на вкладке «Войска».",
+                    description = "Гильдия дальнего боя: лучники на поле. Прокачка стрелков и подрывников — на вкладке «Войска».",
                     requiresAnyTech = new[] { TechIds.Archery }, productionCost = 5, maxHp = 70, unitBranch = UnitClass.Archer,
                     effects = { new EffectValue(CityEffect.UnlockArchers, 1) },
                     upgrades =
                     {
-                        new UpgradeConfig("bowstring", "Тугая тетива", "Лучники +15% ХП и атаки", "", 5,
+                        new UpgradeConfig("bowstring", "Тугая тетива", "Лучники +15% ХП и атаки", "", 25,
                             new EffectValue(CityEffect.ArcherStats, 0.15f)),
-                        new UpgradeConfig("composite_bows", "Составные луки", "Лучники +25% ХП и атаки", TechIds.CompositeBow, 7,
+                        new UpgradeConfig("composite_bows", "Составные луки", "Лучники +25% ХП и атаки", TechIds.CompositeBow, 30,
                             new EffectValue(CityEffect.ArcherStats, 0.25f)),
-                        new UpgradeConfig("sights", "Прицел", "В боевом слоте появляются ×2: кластер рядом бьёт вдвое сильнее", "", 6,
+                        new UpgradeConfig("sights", "Прицел", "В боевом слоте появляются ×2: кластер, который касается ×2, действует вдвое сильнее (удары и навыки)", "", 30,
                             new EffectValue(CityEffect.MultiplierSymbols, 1)),
-                        new UpgradeConfig("crossbows", "Арбалеты", "Луки → арбалеты: стрелки +15%, болты вдвое реже ловят щитом", TechIds.Crossbows, 10,
+                        new UpgradeConfig("crossbows", "Арбалеты", "Луки → арбалеты: стрелки +15%, болты вдвое реже ловят щитом", TechIds.Crossbows, 35,
                             new EffectValue(CityEffect.Crossbows, 1), new EffectValue(CityEffect.ArcherStats, 0.15f)) { gate = true },
-                        new UpgradeConfig("heavy_bolts", "Тяжёлые болты", "Стрелки +20% ХП и атаки", "", 8,
+                        new UpgradeConfig("heavy_bolts", "Тяжёлые болты", "Стрелки +20% ХП и атаки", "", 45,
                             new EffectValue(CityEffect.ArcherStats, 0.2f)) { tier = 2 },
-                        new UpgradeConfig("volley_drill", "Залповый огонь", "«Залп» на 50% сильнее", "", 8,
+                        new UpgradeConfig("volley_drill", "Залповый огонь", "«Залп» на 50% сильнее", "", 50,
                             new EffectValue(CityEffect.ArcherSkill, 0.5f)) { tier = 2 },
-                        new UpgradeConfig("marksmen", "Меткие стрелки", "Множители в слоте: ×2 → ×3", "", 10,
+                        new UpgradeConfig("marksmen", "Меткие стрелки", "Множители в боевом слоте: ×2 → ×3", "", 60,
                             new EffectValue(CityEffect.MultiplierValue, 1)) { tier = 2 },
+                        new UpgradeConfig("powder_kegs", "Пороховые бочки", "Подрывники +30% ХП и атаки", TechIds.Gunpowder, 70,
+                            new EffectValue(CityEffect.BomberStats, 0.3f)) { tier = 2 },
+                        new UpgradeConfig("dynamite_bundles", "Связки динамита", "«Динамит» подрывников на 50% сильнее", TechIds.Gunpowder, 80,
+                            new EffectValue(CityEffect.BomberSkill, 0.5f)) { tier = 2 },
                     },
                 },
                 new BuildingConfig
                 {
                     type = BuildingType.Sanctuary, title = "Святилище", shortLabel = "СВЯТИЛ.", color = new Color(0.58f, 0.42f, 0.86f),
-                    description = "Гильдия магии: жрецы на поле и +1 перемешивание поля в день. Прокачка жрецов — на вкладке «Войска».",
+                    description = "Гильдия магии: жрецы на поле и +1 перемешивание поля в день. Прокачка жрецов и магов — на вкладке «Войска».",
                     requiresAnyTech = new[] { TechIds.Mysticism }, productionCost = 5, maxHp = 60, unitBranch = UnitClass.Priest,
                     effects = { new EffectValue(CityEffect.UnlockPriests, 1), new EffectValue(CityEffect.Reshuffles, 1) },
                     upgrades =
                     {
-                        new UpgradeConfig("herbs", "Лечебные травы", "Жрецы лечат на 50% сильнее", TechIds.Healing, 6,
+                        new UpgradeConfig("herbs", "Лечебные травы", "Жрецы лечат на 50% сильнее", TechIds.Healing, 30,
                             new EffectValue(CityEffect.PriestHeal, 0.5f)),
-                        new UpgradeConfig("psalter", "Молитвенник", "«Молитва» на 30% сильнее", "", 5,
+                        new UpgradeConfig("psalter", "Молитвенник", "«Молитва» на 30% сильнее", "", 25,
                             new EffectValue(CityEffect.PriestSkill, 0.3f)),
-                        new UpgradeConfig("candles", "Свечи", $"В боевом слоте появляются Свечи {candle}: 3+ в любом месте — «Чудо»", "", 6,
+                        new UpgradeConfig("candles", "Свечи", $"В боевом слоте появляются Свечи {candle}. 3+ свечи в любом месте слота — «Чудо»: все свои лечатся на 12% ХП и 2 шага получают на 25% меньше урона", "", 30,
                             new EffectValue(CityEffect.RelicSymbols, 1)),
-                        new UpgradeConfig("staffs", "Посохи", "Жрецы с посохами: +25% ХП и атаки, лечение +25%", TechIds.Staffs, 10,
+                        new UpgradeConfig("staffs", "Посохи", "Жрецы с посохами: +25% ХП и атаки, лечение +25%", TechIds.Staffs, 35,
                             new EffectValue(CityEffect.PriestStats, 0.25f), new EffectValue(CityEffect.PriestHeal, 0.25f)) { gate = true },
-                        new UpgradeConfig("cloisters", "Обители", "Жрецы +25% ХП и атаки", TechIds.Monasticism, 10,
+                        new UpgradeConfig("cloisters", "Обители", "Жрецы +25% ХП и атаки", TechIds.Monasticism, 50,
                             new EffectValue(CityEffect.PriestStats, 0.25f)) { tier = 2 },
-                        new UpgradeConfig("holy_relics", "Святые мощи", $"«Чудо» от Свечей {candle} вдвое сильнее", "", 9,
+                        new UpgradeConfig("holy_relics", "Святые мощи", $"«Чудо» от Свечей {candle} лечит вдвое сильнее", "", 50,
                             new EffectValue(CityEffect.MiraclePower, 1)) { tier = 2 },
-                        new UpgradeConfig("blessed_staffs", "Освящённые посохи", "«Молитва» на 50% сильнее", "", 8,
+                        new UpgradeConfig("blessed_staffs", "Освящённые посохи", "«Молитва» на 50% сильнее", "", 60,
                             new EffectValue(CityEffect.PriestSkill, 0.5f)) { tier = 2 },
+                        new UpgradeConfig("grimoires", "Гримуары", "Маги +30% ХП и атаки", TechIds.Sorcery, 70,
+                            new EffectValue(CityEffect.MageStats, 0.3f)) { tier = 2 },
+                        new UpgradeConfig("storm_staffs", "Грозовые посохи", "«Цепная молния» магов на 50% сильнее", TechIds.Sorcery, 80,
+                            new EffectValue(CityEffect.MageSkill, 0.5f)) { tier = 2 },
                     },
                 },
                 new BuildingConfig
@@ -419,6 +460,34 @@ namespace Casiwar
                             new EffectValue(CityEffect.KnowledgePercent, 0.5f)),
                     },
                 },
+                // Чудеса света: куда тратить накопленное производство
+                Wonder(BuildingType.Stonehenge, "Стоунхендж", "СТОУНХ.", 35, $"+1 перемешивание поля в день и +20% {knowledge}",
+                    new[] { TechIds.Mysticism }, new EffectValue(CityEffect.Reshuffles, 1), new EffectValue(CityEffect.KnowledgePercent, 0.2f)),
+                Wonder(BuildingType.Pyramids, "Пирамиды", "ПИРАМИДЫ", 45, "+6 символов на поле каждый день (и ходов больше)",
+                    new[] { TechIds.Crafts }, new EffectValue(CityEffect.Reserve, 6)),
+                Wonder(BuildingType.GreatWall, "Великая стена", "СТЕНА", 50, "Набеги наносят на 40% меньше урона",
+                    new[] { TechIds.Masonry }, new EffectValue(CityEffect.RaidDefense, 0.4f)),
+                Wonder(BuildingType.Tiltyard, "Ристалище", "РИСТАЛ.", 55, "Выжившие получают +2 опыта за каждый бой",
+                    new[] { TechIds.Bronze }, new EffectValue(CityEffect.BattleXp, 2)),
+                Wonder(BuildingType.Colossus, "Колосс", "КОЛОСС", 60, $"+1 {gold} с каждой монеты на поле",
+                    new[] { TechIds.Trade }, new EffectValue(CityEffect.GoldPerCoin, 1)),
+                Wonder(BuildingType.GreatLibrary, "Великая библиотека", "БИБЛИОТ.", 70, $"Ещё +50% {knowledge}",
+                    new[] { TechIds.Philosophy }, new EffectValue(CityEffect.KnowledgePercent, 0.5f)),
+                Wonder(BuildingType.TerracottaArmy, "Терракотовая армия", "ТЕРРАК.", 90, "Все отряды (и ополченцы) +15% ХП и атаки",
+                    new[] { TechIds.TowerShields, TechIds.Crossbows, TechIds.Staffs }, new EffectValue(CityEffect.ArmyStats, 0.15f)),
+            };
+        }
+
+        /// <summary>Чудо света: одно на город, дорогое в ⚒, без улучшений; разрушено набегом — не работает, пока не починят.</summary>
+        private static BuildingConfig Wonder(BuildingType type, string title, string shortLabel, int productionCost, string description,
+            string[] techs, params EffectValue[] effects)
+        {
+            return new BuildingConfig
+            {
+                type = type, title = title, shortLabel = shortLabel, color = new Color(0.86f, 0.80f, 0.58f),
+                description = "Чудо света: " + description + ".",
+                requiresAnyTech = techs, productionCost = productionCost, maxHp = 80,
+                effects = effects.ToList(),
             };
         }
 
@@ -491,7 +560,7 @@ namespace Casiwar
         public int GoldPerCoin => baseGoldPerCoin + Round(Effect(CityEffect.GoldPerCoin));
         public int ProductionPerSymbol => baseProductionPerSymbol + Round(Effect(CityEffect.ProductionPerSymbol));
         public int FoodPerSymbol => baseFoodPerSymbol + Round(Effect(CityEffect.FoodPerSymbol));
-        public int FoodUpkeep => foodPerCitizen * Population;
+        public int FoodUpkeep => Mathf.CeilToInt(foodPerCitizen * Population - 0.001f);
         public int GrowthCost => Mathf.Max(1, Round((baseGrowthCost + growthCostPerCitizen * Population)
                                                     * (1f - Mathf.Clamp(Effect(CityEffect.GrowthDiscount), 0f, 0.9f))));
         public float RaidDamageMultiplier => 1f - Mathf.Clamp(Effect(CityEffect.RaidDefense), 0f, 0.9f);
@@ -503,8 +572,18 @@ namespace Casiwar
         /// <summary>Луки стали арбалетами: болт пробивает щиты.</summary>
         public bool HasCrossbows => Effect(CityEffect.Crossbows) > 0f;
 
-        /// <summary>Удачных ходов на поле в день (пока константа; позже — культура).</summary>
-        public int ActionsPerDay => actionsPerDay;
+        /// <summary>Символов за день: поле целиком + запас сверху.</summary>
+        public int SymbolsPerDay => BoardSize * BoardSize + BoardReserve;
+
+        /// <summary>Ходов на поле в день: база + 1 за каждые symbolsPerExtraAction символов сверх стартовых (позже — культура).</summary>
+        public int ActionsPerDay
+        {
+            get
+            {
+                int startSymbols = baseBoardSize * baseBoardSize + baseReserve + reservePerCitizen * startPopulation;
+                return actionsPerDay + Mathf.Max(0, SymbolsPerDay - startSymbols) / Mathf.Max(1, symbolsPerExtraAction);
+            }
+        }
 
         /// <summary>Перемешиваний поля в день — дают постройки веры (святилище).</summary>
         public int ReshufflesPerDay => Round(Effect(CityEffect.Reshuffles));
@@ -544,7 +623,10 @@ namespace Casiwar
         /// <summary>«Былины»: линия 5+ любых юнитов призывает богатыря.</summary>
         public bool HeroUnlocked => IsResearched(TechIds.Epics);
 
-        public float ClassStatMultiplier(UnitClass unitClass)
+        /// <summary>Множитель ХП и атаки класса: улучшения его гильдии и чудеса, что усиливают всех.</summary>
+        public float ClassStatMultiplier(UnitClass unitClass) => GuildStatMultiplier(unitClass) * (1f + Effect(CityEffect.ArmyStats));
+
+        private float GuildStatMultiplier(UnitClass unitClass)
         {
             switch (unitClass)
             {
@@ -555,9 +637,24 @@ namespace Casiwar
                 case UnitClass.Monk:
                 case UnitClass.Mage:
                 case UnitClass.Hero:
-                    // Гибриды и богатырь пользуются улучшениями «родительских» гильдий — в среднем
-                    return UnitClasses.Parents(unitClass).Average(ClassStatMultiplier);
+                    // Гибриды и богатырь пользуются улучшениями «родительских» гильдий (в среднем) и своими
+                    return UnitClasses.Parents(unitClass).Average(GuildStatMultiplier) * (1f + Effect(OwnStats(unitClass)));
                 default: return 1f;
+            }
+        }
+
+        /// <summary>+опыта каждому выжившему за бой (Ристалище).</summary>
+        public int BattleXpBonus => Round(Effect(CityEffect.BattleXp));
+
+        /// <summary>Свои улучшения статов гибрида или богатыря.</summary>
+        private static CityEffect OwnStats(UnitClass unitClass)
+        {
+            switch (unitClass)
+            {
+                case UnitClass.Bomber: return CityEffect.BomberStats;
+                case UnitClass.Monk: return CityEffect.MonkStats;
+                case UnitClass.Mage: return CityEffect.MageStats;
+                default: return CityEffect.HeroStats;
             }
         }
 
@@ -569,6 +666,9 @@ namespace Casiwar
                 case UnitClass.Warrior: return (1f + Effect(CityEffect.WarriorSkill)) * ClassStatMultiplier(unitClass);
                 case UnitClass.Archer: return (1f + Effect(CityEffect.ArcherSkill)) * ClassStatMultiplier(unitClass);
                 case UnitClass.Priest: return (1f + Effect(CityEffect.PriestSkill)) * PriestHealMultiplier;
+                case UnitClass.Bomber: return 1f + Effect(CityEffect.BomberSkill);
+                case UnitClass.Monk: return 1f + Effect(CityEffect.MonkSkill);
+                case UnitClass.Mage: return 1f + Effect(CityEffect.MageSkill);
                 default: return 1f;
             }
         }
@@ -692,6 +792,19 @@ namespace Casiwar
             return true;
         }
 
+        /// <summary>
+        /// Цена улучшения. В гильдиях цены плавно растут вглубь ветки: первые ~30–45, последние ~90–115.
+        /// Все цены покупок идут через этот метод — тут же можно сделать цену зависящей от состояния города.
+        /// </summary>
+        public int UpgradeCost(Building building, UpgradeConfig upgrade) => upgrade != null ? upgrade.goldCost : 0;
+
+        /// <summary>В здании можно что-то купить прямо сейчас: золота хватает, наука изучена, ярус открыт (для подсветки).</summary>
+        public bool CanUpgradeNow(Building building) =>
+            building != null && building.Config.upgrades.Any(u => WhyCannotUpgrade(building, u) == null);
+
+        /// <summary>Есть что купить: в гильдиях (guilds — вкладка «Войска») или в остальных зданиях города.</summary>
+        public bool AnyUpgradeNow(bool guilds) => placed.Any(b => (b.Config.unitBranch != UnitClass.None) == guilds && CanUpgradeNow(b));
+
         public string WhyCannotUpgrade(Building building, UpgradeConfig upgrade)
         {
             if (building.Upgrades.Contains(upgrade.id)) return "Уже сделано";
@@ -707,7 +820,8 @@ namespace Casiwar
                 if (bought < upgrade.requiredInTier) return $"Нужно ещё {upgrade.requiredInTier - bought} улучш. этого яруса";
             }
             if (building.IsRuined) return "Сначала почините здание";
-            if (Gold < upgrade.goldCost) return $"Нужно {upgrade.goldCost} {GameVisuals.IconGold}";
+            int cost = UpgradeCost(building, upgrade);
+            if (Gold < cost) return $"Нужно {cost} {GameVisuals.IconGold}";
             return null;
         }
 
@@ -717,9 +831,57 @@ namespace Casiwar
             message = upgrade == null ? "Нет такого улучшения" : WhyCannotUpgrade(building, upgrade);
             if (message != null) return false;
 
-            Gold -= upgrade.goldCost;
+            Gold -= UpgradeCost(building, upgrade);
             building.Upgrades.Add(upgrade.id);
             message = $"{building.Config.title}: {upgrade.title}";
+            NotifyChanged();
+            return true;
+        }
+
+        // =====================================================================
+        //  Куда ещё девать производство: границы и караваны
+        // =====================================================================
+
+        /// <summary>Цена расширения границ на 1 клетку во все стороны (дома расширяют их сами и бесплатно).</summary>
+        public int BorderExpansionCost => borderCostPerRadius * (TerritoryRadius + 1);
+
+        public string WhyCannotExpandBorders()
+        {
+            if (TerritoryRadius >= maxCityRadius) return "Границы уже самые широкие";
+            if (IsTownHallRuined) return "Сначала почините ратушу";
+            if (Production < BorderExpansionCost) return $"Нужно {BorderExpansionCost} {GameVisuals.IconProduction}";
+            return null;
+        }
+
+        public bool TryExpandBorders(out string message)
+        {
+            message = WhyCannotExpandBorders();
+            if (message != null) return false;
+            Production -= BorderExpansionCost;
+            TerritoryRadius++;
+            int border = TerritoryRadius * 2 + 1;
+            message = $"Границы города расширены: {border}×{border}";
+            NotifyChanged();
+            return true;
+        }
+
+        /// <summary>Караван с базара: caravanProduction ⚒ → caravanGold 🪙 (сколько угодно раз).</summary>
+        public string WhyCannotSendCaravan()
+        {
+            Building bazaar = placed.FirstOrDefault(b => b.Type == BuildingType.Bazaar);
+            if (bazaar == null) return "Нет базара";
+            if (bazaar.IsRuined) return "Сначала почините базар";
+            if (Production < caravanProduction) return $"Нужно {caravanProduction} {GameVisuals.IconProduction}";
+            return null;
+        }
+
+        public bool TrySendCaravan(out string message)
+        {
+            message = WhyCannotSendCaravan();
+            if (message != null) return false;
+            Production -= caravanProduction;
+            Gold += caravanGold;
+            message = $"Караван ушёл: −{caravanProduction} {GameVisuals.IconProduction}, +{caravanGold} {GameVisuals.IconGold}";
             NotifyChanged();
             return true;
         }

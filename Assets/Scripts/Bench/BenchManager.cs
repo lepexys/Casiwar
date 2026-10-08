@@ -40,6 +40,8 @@ namespace Casiwar
         [Min(0)] public int xp;
         public EquippedItem armor;
         public EquippedItem weapon;
+        /// <summary>Черты богатыря (из каких символов сложена его линия); у остальных не используются.</summary>
+        public HeroTraits hero;
 
         public BenchUnit() { }
 
@@ -61,8 +63,10 @@ namespace Casiwar
         public int ItemArmor => EquippedItem.IsValid(armor) ? armor.data.GetArmor(armor.tier) : 0;
         public int ItemAttack => EquippedItem.IsValid(weapon) ? weapon.data.GetAttack(weapon.tier) : 0;
 
-        public int MaxHp => data.GetMaxHp(stars, level);
-        public int Attack => data.GetAttack(stars, level) + ItemAttack;
+        public bool IsHero => data != null && data.unitClass == UnitClass.Hero && hero != null;
+        public int HeroArmor => IsHero ? hero.BonusArmor : 0;
+        public int MaxHp => Mathf.RoundToInt(data.GetMaxHp(stars, level) * (IsHero ? hero.HpMultiplier : 1f));
+        public int Attack => Mathf.RoundToInt(data.GetAttack(stars, level) * (IsHero ? hero.AttackMultiplier : 1f)) + ItemAttack;
         public int Heal => data.GetHeal(stars, level);
         public int SellPrice => data.GetSellPrice(stars, level);
         public int XpToNext => UnitData.XpToNext(level);
@@ -72,7 +76,9 @@ namespace Casiwar
         public float LevelValue => IsMaxLevel ? UnitData.MaxLevel : level + Mathf.Clamp01(xp / (float)XpToNext);
 
         /// <summary>«Воин ★★ ур. 3».</summary>
-        public string Title => $"{data.unitName} {GameVisuals.Stars(stars)} ур. {level}";
+        public string Title => $"{Name} {GameVisuals.Stars(stars)} ур. {level}";
+        /// <summary>Имя; у богатыря — с прозвищем по чертам («Богатырь-витязь»).</summary>
+        public string Name => IsHero && hero.Nickname.Length > 0 ? $"{data.unitName}-{hero.Nickname}" : data.unitName;
 
         /// <summary>Задать уровень с дробной частью: целое — уровень, дробь — опыт к следующему.</summary>
         public void SetLevelValue(float value)
@@ -216,12 +222,12 @@ namespace Casiwar
         /// Новобранец с поля (1★, уровень level). Третий одинаковый сразу сливается с двумя другими.
         /// Возвращает юнита, в которого он превратился (новый или слитый); null — армия полна.
         /// </summary>
-        public BenchUnit AddRecruit(UnitData data, int level = 1, int stars = 1)
+        public BenchUnit AddRecruit(UnitData data, int level = 1, int stars = 1, HeroTraits hero = null)
         {
             EnsureInitialized();
             if (data == null) return null;
 
-            var recruit = new BenchUnit(data, stars, level);
+            var recruit = new BenchUnit(data, stars, level) { hero = hero };
             int slot = FirstFreeSlot();
             if (slot >= 0)
             {
@@ -315,6 +321,7 @@ namespace Casiwar
             EnsureInitialized();
             var dead = new List<string>();
             var promoted = new List<string>();
+            int bonusXp = game != null && game.city != null ? game.city.BattleXpBonus : 0; // Ристалище
             foreach (UnitBattleResult result in results)
             {
                 int index = System.Array.IndexOf(slots, result.Unit);
@@ -326,7 +333,7 @@ namespace Casiwar
                     slots[index] = null;
                     continue;
                 }
-                int gained = result.Unit.AddXp(xpPerBattle + result.Kills * xpPerKill + (victory ? xpForVictory : 0));
+                int gained = result.Unit.AddXp(xpPerBattle + bonusXp + result.Kills * xpPerKill + (victory ? xpForVictory : 0));
                 if (gained > 0) promoted.Add($"{result.Unit.data.unitName} → ур. {result.Unit.level}");
             }
             selectedIndex = -1;
@@ -592,7 +599,7 @@ namespace Casiwar
         private string Describe(BenchUnit unit)
         {
             UnitData data = unit.data;
-            int armor = data.armor + unit.ItemArmor;
+            int armor = data.armor + unit.ItemArmor + unit.HeroArmor;
             CityManager city = game != null ? game.city : null;
             string kit = string.Empty; // щит воина и лук/арбалет стрелка — от науки и гильдий
             if (city != null && data.shieldBearer)
@@ -604,8 +611,9 @@ namespace Casiwar
                 : $"Броня: {(EquippedItem.IsValid(unit.armor) ? unit.armor.Name : "нет")} · Оружие: {(EquippedItem.IsValid(unit.weapon) ? unit.weapon.Name : "нет")}";
             string heal = data.IsHealer ? $" · лечение {unit.Heal}" : string.Empty;
             string xp = unit.IsMaxLevel ? "макс. уровень" : $"опыт {unit.xp}/{unit.XpToNext}";
-            return $"{data.unitName} {GameVisuals.Stars(unit.stars)} ({GameVisuals.ClassName(data.unitClass)}{kit}) · ур. {unit.level}, {xp}\n" +
-                   $"ХП {unit.MaxHp} · АТК {unit.Attack}{heal} · броня {armor}\n" +
+            string traits = unit.IsHero ? $"\n{unit.hero.Summary}" : string.Empty;
+            return $"{unit.Name} {GameVisuals.Stars(unit.stars)} ({GameVisuals.ClassName(data.unitClass)}{kit}) · ур. {unit.level}, {xp}\n" +
+                   $"ХП {unit.MaxHp} · АТК {unit.Attack}{heal} · броня {armor}{traits}\n" +
                    $"{gear}\nПродажа: {unit.SellPrice} {GameVisuals.IconGold}. Нажмите другой слот — переставить.";
         }
     }

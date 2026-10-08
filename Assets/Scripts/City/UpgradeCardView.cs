@@ -41,8 +41,10 @@ namespace Casiwar
 
         /// <param name="reason">Почему нельзя купить (null — можно).</param>
         /// <param name="onlyGold">Не хватает только золота — на кнопке остаётся цена.</param>
-        public void Bind(UpgradeConfig upgrade, bool bought, string reason, bool onlyGold)
+        /// <param name="cost">Цена сейчас (растёт с каждым купленным улучшением гильдии); меньше 0 — цена из настроек.</param>
+        public void Bind(UpgradeConfig upgrade, bool bought, string reason, bool onlyGold, int cost = -1)
         {
+            if (cost < 0) cost = upgrade.goldCost;
             bool open = bought || reason == null || onlyGold;
             if (background != null)
             {
@@ -62,7 +64,7 @@ namespace Casiwar
             if (buttonLabel != null)
             {
                 buttonLabel.text = bought ? "Куплено"
-                    : reason == null || onlyGold ? $"Купить · {upgrade.goldCost} {GameVisuals.IconGold}"
+                    : reason == null || onlyGold ? $"Купить · {cost} {GameVisuals.IconGold}"
                     : reason;
             }
         }

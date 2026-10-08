@@ -28,6 +28,8 @@ namespace Casiwar
         [Tooltip("Подпись-заглушка: буква класса, символ и т. п.")]
         public TMP_Text label;
 
+        private static readonly Color EmptyCellColor = new Color(1f, 1f, 1f, 0.06f);
+
         private ITileInputHandler owner;
         private RectTransform rect;
         private CanvasGroup group;
@@ -120,11 +122,20 @@ namespace Casiwar
             }
         }
 
-        /// <summary>Пустая клетка: ничего не видно и по ней нельзя кликнуть.</summary>
+        /// <summary>
+        /// Пустая клетка. На поле с вводом (город) — еле заметный след: туда можно сдвинуть соседнюю фишку,
+        /// поэтому клетка ловит клики. Без ввода (боевой слот) — не видно ничего.
+        /// </summary>
         public void Hide()
         {
             ResetState();
-            if (background != null) background.enabled = false;
+            if (background != null)
+            {
+                background.enabled = owner != null;
+                background.sprite = null;
+                background.type = Image.Type.Simple;
+                background.color = EmptyCellColor;
+            }
             if (icon != null) icon.enabled = false;
             if (label != null) label.text = string.Empty;
         }
