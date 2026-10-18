@@ -37,6 +37,8 @@ namespace Casiwar
         private float moveSpeed = 1000f; // px/сек
         private bool selected;
         private bool hinted;
+        private bool tinted;     // фон сейчас подсвечен подсказкой
+        private Color baseColor; // цвет фона без подсветки
         private bool popping;
         private float popTime;
         private float popDuration = 0.2f;
@@ -105,7 +107,7 @@ namespace Casiwar
                 background.enabled = true;
                 background.sprite = look.shape;
                 background.type = look.sliced ? Image.Type.Sliced : Image.Type.Simple;
-                background.color = look.color;
+                background.color = baseColor = look.color;
             }
             if (icon != null)
             {
@@ -134,7 +136,7 @@ namespace Casiwar
                 background.enabled = owner != null;
                 background.sprite = null;
                 background.type = Image.Type.Simple;
-                background.color = EmptyCellColor;
+                background.color = baseColor = EmptyCellColor;
             }
             if (icon != null) icon.enabled = false;
             if (label != null) label.text = string.Empty;
@@ -168,9 +170,19 @@ namespace Casiwar
             }
             else if (hinted)
             {
-                scale = 1f + 0.08f * (0.5f + 0.5f * Mathf.Sin(Time.time * 9f));
+                scale = 1f + 0.1f * (0.5f + 0.5f * Mathf.Sin(Time.time * 9f));
             }
             transform.localScale = new Vector3(scale, scale, 1f);
+
+            // Подсказка ещё и мигает белым — видно сразу, а не только по «дыханию»
+            if (background != null && (hinted || tinted))
+            {
+                tinted = hinted && !popping;
+                background.color = tinted
+                    ? Color.Lerp(baseColor, baseColor.grayscale > 0.75f ? new Color(1f, 0.78f, 0.25f) : Color.white,
+                        0.5f * (0.5f + 0.5f * Mathf.Sin(Time.time * 9f))) // светлая фишка мигает золотом
+                    : baseColor;
+            }
         }
 
         // ---------- Ввод ----------

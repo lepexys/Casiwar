@@ -41,8 +41,16 @@ namespace Casiwar
                 new Vector3(length, width, 1f), new Vector3(length, width * 0.3f, 1f), color, duration);
         }
 
+        /// <summary>Вспышка: прямоугольник size (вся арена) цвета color чуть растёт и гаснет — для суперударов.</summary>
+        public static void Flash(Vector2 position, Vector2 size, Color color, float duration = 0.6f)
+        {
+            Spawn(GameVisuals.Square, position, Quaternion.identity, new Vector3(size.x, size.y, 1f),
+                new Vector3(size.x * 1.04f, size.y * 1.04f, 1f), color, duration);
+        }
+
         /// <summary>Всплывающий текст над ареной (TextMeshPro в мире).</summary>
-        public static void FloatingText(Vector2 position, string message, Color color, float fontSize = 3f, float duration = 0.9f)
+        public static void FloatingText(Vector2 position, string message, Color color, float fontSize = 3f, float duration = 0.9f,
+            bool outline = false)
         {
             var go = new GameObject("FloatingText");
             go.transform.position = position;
@@ -55,6 +63,12 @@ namespace Casiwar
             label.color = color;
             label.sortingOrder = SortingOrder + 1;
             label.rectTransform.sizeDelta = new Vector2(4f, 1f);
+            if (outline)
+            {
+                // Крупные надписи (суперудары) читаются поверх юнитов
+                label.outlineWidth = 0.22f;
+                label.outlineColor = new Color32(20, 12, 8, 255);
+            }
 
             var vfx = go.AddComponent<BattleVfx>();
             vfx.text = label;

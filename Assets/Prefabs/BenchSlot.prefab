@@ -257,6 +257,7 @@ MonoBehaviour:
   selectedColor: {r: 0.96, g: 0.78, b: 0.3, a: 1}
   levelColor: {r: 1, g: 0.82, b: 0.3, a: 1}
   selectedLevelColor: {r: 0.16, g: 0.12, b: 0.06, a: 1}
+  emptyCaption: 
 --- !u!1 &3174988699592514643
 GameObject:
   m_ObjectHideFlags: 0

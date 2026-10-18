@@ -5,6 +5,7 @@ using System.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Serialization;
+using UnityEngine.UI;
 using Random = UnityEngine.Random;
 
 namespace Casiwar
@@ -24,40 +25,54 @@ namespace Casiwar
         public bool Victory;
         /// <summary>Сколько юнитов игрока дожило до конца боя.</summary>
         public int Survivors;
-        /// <summary>Сумма звёзд выживших юнитов игрока — столько круток в «Трофеях» (★★ и ★★★ → 5).</summary>
-        public int SurvivorStars;
+        /// <summary>
+        /// Сумма звёзд убитых врагов — столько круток в «Трофеях» (★★ и ★★★ → 5). Считаются убитые, а не наши выжившие:
+        /// большой армией по мелкому отряду много не набить.
+        /// </summary>
+        public int KilledStars;
         /// <summary>Каждый юнит игрока: жив ли и сколько врагов добил (→ BenchManager.ApplyBattleResults).</summary>
         public readonly List<UnitBattleResult> PlayerUnits = new List<UnitBattleResult>();
         /// <summary>Удар каждого уцелевшего варвара по городу.</summary>
         public readonly List<float> RaidHits = new List<float>();
+        /// <summary>Уцелевшие враги.</summary>
+        public readonly List<BenchUnit> EnemySurvivors = new List<BenchUnit>();
+        /// <summary>Погибшие враги (их отряд на карте их теряет; кто не влез на арену — жив).</summary>
+        public readonly List<BenchUnit> EnemyFallen = new List<BenchUnit>();
     }
 
     /// <summary>
-    /// ФАЗА 2 — бой на клетках с варварами. Арена — сетка columns×rows (центр = этот объект), юниты стоят
-    /// в клетках, ходят из клетки в клетку и бьют тех, до кого достают. Игрок внизу, варвары вверху.
+    /// Бой на клетках с отрядом, который пришёл к городу или встретился в поле. Арена — сетка columns×rows
+    /// (центр = этот объект), юниты стоят в клетках, ходят из клетки в клетку и бьют тех, до кого достают.
+    /// Игрок внизу, враг вверху.
     ///
-    /// Бой идёт шагами. Каждый шаг:
-    ///   1) спин боевого слота игрока (BattleSlotMachine) → кластеры решают, кто действует:
-    ///      массовые навыки классов → «Чудо» (3+ Свечи) → перемещения (➜) → обычные атаки (⚔).
-    ///      Каскад: сработавшее лопается, досыпаются новые символы — следующая волна с множителем ×2, ×3…;
-    ///      ×2 рядом с кластером ещё умножают его силу (урон атак, сила навыка);
-    ///   2) то же самое делают варвары — их слот скрыт, видно только итог (особых символов у них нет).
-    /// Победа — когда у противника не осталось юнитов; лимит шагов — решает доля оставшегося ХП.
-    /// Если бой проигран, уцелевшие варвары грабят город (BattleOutcome.RaidHits → CityManager.ApplyRaid).
+    /// Бой идёт В РЕАЛЬНОМ ВРЕМЕНИ: каждый боец сам идёт к ближайшему врагу (шаг — moveInterval) и бьёт, когда достаёт
+    /// (удар — attackInterval; жрецы лечат раненых). А мы собираем три в ряд на поле боя (BattleBoard), и бойцы делают
+    /// то, что собрано:
+    ///   ⚔ натиск — все, кто достаёт, бьют разом; кто не достаёт — шаг к врагу;  ➜ марш — все идут к врагу;
+    ///   символ класса — его массовый навык (3 в ряд — ×1, 4 — ×1.5, 5 — ×2); 5+ в ряд — СУПЕРУДАР класса, если он открыт
+    ///   приказом гильдии («Боевой клич», «Пли!», «Молебен»; гибридам — приказом любой родительской гильдии) и класс не
+    ///   перезаряжается (superCooldownSeconds, «Выдержка» — быстрее): воины — «Землетрясение», лучники — «Огненный
+    ///   дождь», жрецы — «Воскрешение», подрывники — «Пороховая бочка», монахи — «Вихрь», маги — «Ледяная буря»;
+    ///   🕯 3 в ряд — «Чудо»; 🚩 и ×2 — джокеры (×2 усиливает ряд); каскад — каждая волна сильнее (cascadeBonus).
+    /// Враг поля не имеет: навык случайного своего класса он применяет сам раз в enemySkillInterval секунд,
+    ///   а с enemySuperDay — ещё и суперудар раз в enemySuperInterval.
+    /// Вожак: богатырь в слоте вожака даёт всем бойцам своей линейки +ХП и +атаку (HeroTraits.LeadHp/LeadAttack);
+    ///   вождь варваров так же ведёт своих. Богатырь своего символа не имеет — бьёт вместе с любым навыком своей стороны.
+    /// Победа — когда у противника не осталось юнитов; время вышло (battleDuration) — решает доля оставшегося ХП.
+    /// Если бой проигран, уцелевшие враги грабят город (BattleOutcome.RaidHits → CityManager.ApplyRaid).
     /// Погибшие юниты игрока не возвращаются, выжившие растут в уровнях (BattleOutcome.PlayerUnits).
-    /// Варвары тоже растут: с каждым днём выше уровень, позже среди них бывают ★★ и ★★★,
-    /// с 10-го дня — подрывники и маги (шаманы), с 15-го волну ведёт вождь-богатырь.
+    /// Враги растут с ходами: выше уровень, позже среди них бывают ★★ и ★★★,
+    /// с 10-го хода — подрывники и маги (шаманы), с 15-го отряд ведёт вождь-богатырь.
     ///
     /// Массовые навыки (для обеих сторон):
     ///   Воины   «Рывок»       — каждый бросается к ближайшему врагу (до нескольких клеток) и бьёт: чем дальше
     ///                           пролетел, тем сильнее удар; не достал — разгон копится до следующего удара.
-    ///                           Со щитами это «Таран щитом»: цель оглушена и пропускает свой ход (ростовые — два);
+    ///                           Со щитами это «Таран щитом»: цель оглушена (ростовые щиты — вдвое дольше);
     ///   Лучники «Залп»        — все лучники разом стреляют (дальность не важна);
-    ///   Жрецы   «Молитва»     — лечат всех своих и благословляют: меньше урона несколько шагов.
+    ///   Жрецы   «Молитва»     — лечат всех своих и благословляют: меньше урона несколько секунд.
     ///   Подрывники «Динамит»  — каждый бросает динамит в самую плотную кучу врагов: взрыв бьёт всех вокруг;
-    ///   Монахи  «Огненные клинки» — оружие ближнего боя у всех своих горит: удары сильнее несколько шагов;
+    ///   Монахи  «Огненные клинки» — оружие ближнего боя у всех своих горит: удары сильнее несколько секунд;
     ///   Маги    «Цепная молния» — молния бьёт цель и перескакивает на ближайших врагов, щиты и броня не помогают.
-    ///   Богатырь своего символа не имеет: он бьёт вместе с любым сработавшим навыком своей стороны.
     ///
     /// Щиты (у своих — после науки и улучшения казарм, у варваров — с определённого дня) ловят удар
     /// не всегда: иногда целиком («БЛОК!»), иногда частично, иногда никак. Стрелы ловятся чаще,
@@ -72,22 +87,87 @@ namespace Casiwar
         };
 
         [Header("Ссылки")]
-        public BattleSlotMachine slotMachine;
+        [Tooltip("Поле боя — три в ряд (пусто — найдётся само)")]
+        public BattleBoard board;
         public CityManager city;
 
         [Header("UI (необязательно)")]
-        [Tooltip("«Шаг 3/30»")]
+        [Tooltip("Сколько осталось времени боя")]
         public TMP_Text stepText;
         [Tooltip("Крупная надпись «ПОБЕДА!» / «ПОРАЖЕНИЕ»")]
         public TMP_Text resultText;
-        [Tooltip("Итог скрытого спина варваров")]
+        [Tooltip("Что сделал враг")]
         public TMP_Text enemyTurnText;
         [Tooltip("Подпись кнопки скорости («Скорость ×1»)")]
         public TMP_Text speedButtonLabel;
-        [Tooltip("Легенда рядом со слотом: что делает каждый символ (пишется под армию и открытые символы)")]
+        [Tooltip("Легенда рядом с полем боя: что даёт каждый ряд (пишется под армию и открытые символы)")]
         public TMP_Text legendText;
-        [Tooltip("Подписи внизу экрана боя: наши юниты по шеренгам (по 5) — атака и точное ХП")]
+        [Tooltip("Подписи внизу экрана боя: наши юниты по шеренгам — атака и точное ХП")]
         public TMP_Text[] rosterLabels = new TMP_Text[0];
+
+        [Header("Устарело: кнопки из старых сцен прячутся")]
+        public Button spinButton;
+        public TMP_Text autoSpinLabel;
+        public TMP_Text moraleText;
+        public Button[] abilityButtons = new Button[0];
+        public Button[] orderButtons = new Button[0];
+
+        [Header("Бой в реальном времени")]
+        [Tooltip("Сколько секунд длится бой; время вышло — решает доля оставшегося ХП")]
+        [Min(10f)] public float battleDuration = 150f;
+        [Tooltip("Секунд между ударами бойца (стрелки — чуть реже, богатырь — чаще)")]
+        [Min(0.2f)] public float attackInterval = 2.3f;
+        [Tooltip("Секунд на шаг в соседнюю клетку")]
+        [Min(0.1f)] public float moveInterval = 1.05f;
+        [Tooltip("Оглушение «на ход» длится столько секунд")]
+        [Min(0.1f)] public float stunSecondsPerTurn = 1.6f;
+
+        [Header("Поле боя: что даёт ряд")]
+        [Tooltip("+сила за каждый символ ряда сверх трёх (4 в ряд — ×1.5, 5 — ×2)")]
+        [Min(0f)] public float lengthBonus = 0.5f;
+        [Tooltip("+сила за каждую волну каскада")]
+        [Min(0f)] public float cascadeBonus = 0.25f;
+        [Tooltip("Ряд ⚔ «натиск»: каждый, кто достаёт до врага, бьёт с этим множителем (× сила ряда)")]
+        [Min(0f)] public float assaultPower = 1f;
+
+        [Header("Суперудары (5 в ряд символов класса; у врага — сами)")]
+        [Tooltip("После суперудара класс перезаряжается столько секунд")]
+        [Min(0f)] public float superCooldownSeconds = 12f;
+        [Tooltip("«Выдержка» стрельбища: перезарядка — эта доля")]
+        [Range(0.1f, 1f)] public float fasterSupersShare = 0.55f;
+        [Tooltip("Сила суперудара (длина ряда × каскад × ×2) — не выше этого")]
+        [Min(1f)] public float superPowerCap = 1.6f;
+        [Tooltip("«Землетрясение» воинов: враги в стольких клетках от воина получают атаку × сила и оглушены")]
+        [Min(1)] public int quakeRadius = 2;
+        [Min(0f)] public float quakePower = 1f;
+        [Min(1)] public int quakeStunTurns = 1;
+        [Tooltip("«Огненный дождь» лучников: столько волн, в каждой каждый лучник бьёт случайного врага")]
+        [Min(1)] public int fireRainWaves = 3;
+        [Min(0f)] public float fireRainPower = 0.6f;
+        [Tooltip("«Воскрешение» жрецов: павших встаёт по числу жрецов, с этой долей ХП; павших нет — все лечатся на reviveHealShare")]
+        [Range(0.1f, 1f)] public float reviveHp = 0.35f;
+        [Range(0.05f, 1f)] public float reviveHealShare = 0.35f;
+        [Tooltip("«Пороховая бочка» подрывников: взрыв радиусом в клетках; урон = сумма атак подрывников × сила")]
+        [Min(1)] public int powderRadius = 2;
+        [Min(0f)] public float powderPower = 1.2f;
+        [Tooltip("«Вихрь» монахов: ударов огнём по каждому врагу вокруг монаха")]
+        [Min(1)] public int whirlwindHits = 2;
+        [Min(0f)] public float whirlwindPower = 0.8f;
+        [Tooltip("«Ледяная буря» магов: урон всем врагам (сумма атак магов × сила, сквозь броню) и заморозка")]
+        [Min(0f)] public float frostPower = 0.45f;
+        [Min(1)] public int frostStunTurns = 1;
+        [Tooltip("Сложность растёт так: «день угрозы» = 1 + (ход − 1) × это (50 ходов ≈ 23 дня старого темпа)")]
+        [Min(0.05f)] public float difficultyPerTurn = 0.45f;
+
+        [Header("Враг: навыки применяет сам")]
+        [Tooltip("Раз в столько секунд (± разброс) — навык случайного своего класса")]
+        [Min(1f)] public float enemySkillInterval = 9.5f;
+        [Tooltip("Наши классы, которым не хватило места на поле (BattleBoard.maxClassSymbols), применяют навык сами — раз в столько секунд")]
+        [Min(1f)] public float offBoardSkillInterval = 10f;
+        [Min(0f)] public float enemySkillJitter = 2f;
+        [Tooltip("С этого «дня угрозы» враг делает и суперудары — раз в столько секунд")]
+        [Min(1)] public int enemySuperDay = 5;
+        [Min(5f)] public float enemySuperInterval = 38f;
 
         [Header("Арена — сетка (центр арены = этот объект)")]
         [Min(3)] public int columns = 7;
@@ -98,13 +178,11 @@ namespace Casiwar
         public Color cellColorA = new Color(0.20f, 0.29f, 0.20f);
         public Color cellColorB = new Color(0.17f, 0.25f, 0.17f);
 
-        [Header("Шаги боя")]
-        [Min(1)] public int maxSteps = 30;
-        [Tooltip("Множитель скорости боя (кнопка ×1/×2/×3)")]
+        [Header("Ход боя")]
+        [Tooltip("Множитель скорости боя (кнопка ×1/×2/×3): бойцы и враг; поле три в ряд — как есть")]
         [Min(0.1f)] public float battleSpeed = 1f;
-        [Min(0f)] public float startDelay = 0.5f;
-        [Tooltip("Пауза после действий стороны (чтобы успеть увидеть удары)")]
-        [Min(0f)] public float actionPause = 0.35f;
+        [Tooltip("«Армии строятся» — пауза перед боем")]
+        [Min(0f)] public float startDelay = 1.5f;
         [Tooltip("Пауза после боя, чтобы игрок увидел результат")]
         [Min(0f)] public float endDelay = 2f;
 
@@ -113,8 +191,6 @@ namespace Casiwar
         [Range(0f, 1f)] public float sideBonusShare = 0.3f;
 
         [Header("Массовые навыки")]
-        [Tooltip("+сила за каждый символ кластера сверх порога")]
-        [Min(0f)] public float powerPerExtraSymbol = 0.25f;
         [Tooltip("«Залп»: урон каждого лучника = атака × множитель × сила")]
         [Min(0f)] public float volleyMultiplier = 1.5f;
         [Tooltip("«Рывок» воинов: на сколько клеток бросается воин")]
@@ -127,20 +203,22 @@ namespace Casiwar
         [Min(0f)] public float prayerHealMultiplier = 0.8f;
         [Tooltip("«Молитва»: благословение снижает входящий урон на эту долю")]
         [Range(0f, 0.9f)] public float blessingReduction = 0.25f;
-        [Min(1)] public int blessingSteps = 2;
+        [Tooltip("Благословение длится столько секунд")]
+        [Min(1)] public int blessingSeconds = 6;
         [Tooltip("«Динамит»: урон взрыва каждому врагу рядом с целью = атака подрывника × множитель × сила")]
         [Min(0f)] public float dynamiteMultiplier = 1.4f;
         [Tooltip("Обычный бросок подрывника задевает врагов рядом с целью этой долей урона")]
         [Range(0f, 1f)] public float bomberSplashShare = 0.5f;
         [Tooltip("«Огненные клинки»: +доля к урону ближнего боя у своих (× сила навыка)")]
         [Min(0f)] public float fireBladesBonus = 0.5f;
-        [Min(1)] public int fireBladesSteps = 3;
+        [Tooltip("«Огненные клинки» горят столько секунд")]
+        [Min(1)] public int fireBladesSeconds = 6;
         [Tooltip("«Цепная молния»: урон по первой цели = атака мага × множитель × сила; дальше слабее")]
         [Min(0f)] public float lightningMultiplier = 1.3f;
         [Min(0)] public int lightningJumps = 3;
         [Range(0f, 1f)] public float lightningFalloff = 0.7f;
 
-        [Header("«Чудо» (3+ Свечи в боевом слоте)")]
+        [Header("«Чудо» (3+ Свечи в ряд на поле боя)")]
         [Tooltip("Лечит каждого своего на эту долю его ХП (× сила «Чуда» × множитель каскада)")]
         [Range(0f, 1f)] public float miracleHealShare = 0.12f;
         [Tooltip("+к лечению за каждую Свечу сверх трёх")]
@@ -168,7 +246,7 @@ namespace Casiwar
         [Min(1)] public int enemyShieldDay = 4;
         [Min(1)] public int enemyTowerShieldDay = 9;
 
-        [Header("Варвары (каждый день — новая волна)")]
+        [Header("Враги (отряды лагерей и армии городов сильнее с каждым ходом)")]
         public List<UnitData> enemyPool = new List<UnitData>();
         [Min(1)] public int baseEnemyCount = 3;
         [Tooltip("+варваров за каждый день")]
@@ -204,8 +282,6 @@ namespace Casiwar
         [Range(0f, 1f)] public float enemyMaxHybridShare = 0.35f;
         [Tooltip("С этого дня волну ведёт вождь-богатырь (один на волну)")]
         [Min(1)] public int enemyHeroDay = 15;
-        [Tooltip("Скрытый слот варваров растёт на 1 клетку каждые N дней")]
-        [Min(1)] public int enemySlotGrowthEveryDays = 3;
 
         [Header("Набег (если бой проигран)")]
         [Tooltip("Удар уцелевшего варвара по зданию = атака × множитель + оставшееся ХП × доля")]
@@ -217,19 +293,37 @@ namespace Casiwar
         private Transform unitsRoot;
         private Transform arenaRoot;
         private Action<BattleOutcome> onFinished;
-        private Coroutine loopRoutine;
+        private float battleTime;
+        /// <summary>Армии построились — бойцы ходят и бьют, поле принимает ряды.</summary>
+        private bool fighting;
+        private float enemySkillTimer;
+        private float enemySuperTimer;
+        private float stepTextTimer;
+        private int boardClassesKey = -1;
+        /// <summary>Чьи символы на поле (до BattleBoard.maxClassSymbols классов; вымерший уступает место следующему).</summary>
+        private readonly List<UnitClass> boardClasses = new List<UnitClass>();
+        private float offBoardTimer;
+        private int offBoardTurn;
+        private bool boardHooked;
         private float playerStartHp;
         private float enemyStartHp;
         private int bannerFrame = -1;
         private float rosterTimer;
         private readonly List<Vector2> bannersThisFrame = new List<Vector2>();
+        /// <summary>С какой секунды боя класс стороны снова может сделать суперудар.</summary>
+        private readonly Dictionary<(Team, UnitClass), float> superReadyAt = new Dictionary<(Team, UnitClass), float>();
+        /// <summary>Вожаки каждой стороны: у нас — по одному на линейку (гарнизон, отряды), у врага — вождь.</summary>
+        private readonly Dictionary<Team, List<BattleUnit>> leaders = new Dictionary<Team, List<BattleUnit>>();
 
         public bool IsRunning { get; private set; }
-        public int CurrentStep { get; private set; }
+        /// <summary>Целые секунды боя: по ним считают длительность благословения и огненных клинков.</summary>
+        public int CurrentStep => Mathf.FloorToInt(battleTime);
         public int Day { get; private set; } = 1;
         public IReadOnlyList<BattleUnit> Units => units;
         public int Columns => columns;
         public int Rows => rows;
+        /// <summary>Сколько наших бойцов встаёт на арену: три шеренги во всю ширину.</summary>
+        public int PlayerCapacity => columns * 3;
 
         private float EnemyStatMultiplier => 1f + (Day - 1) * enemyStatsGrowthPerDay;
         private int EnemyClassLevel => Day >= 5 ? 1 : 0;
@@ -241,25 +335,54 @@ namespace Casiwar
         //  Запуск и завершение боя
         // =====================================================================
 
-        /// <summary>Начать бой. army — юниты со скамейки (порядок = строй), finished — итог после боя.</summary>
-        public void StartBattle(IReadOnlyList<BenchUnit> army, int day, Action<BattleOutcome> finished)
+        /// <summary>
+        /// Начать бой. army — наши бойцы (порядок = строй), enemies — враги (null — сгенерировать по ходу),
+        /// finished — итог после боя. armyRows — наши линейки (гарнизон, отряды): вожак линейки усиливает только её бойцов.
+        /// У врага вожак — его вождь, бонус всем.
+        /// </summary>
+        public void StartBattle(IReadOnlyList<BenchUnit> army, IReadOnlyList<BenchUnit> enemies, int turn, Action<BattleOutcome> finished,
+            IEnumerable<ArmyRow> armyRows = null)
         {
             StopAllCoroutines();
-            if (slotMachine != null) slotMachine.StopSpin();
             ClearUnits();
             EnsureArena();
+            EnsureBoard();
+            HookControls();
 
-            Day = Mathf.Max(1, day);
+            Day = ThreatDay(turn);
             onFinished = finished;
-            CurrentStep = 0;
+            battleTime = 0f;
+            fighting = false;
             occupancy = new BattleUnit[columns, rows];
 
+            leaders.Clear();
             SpawnArmy(army, Team.Player);
-            SpawnArmy(GenerateEnemies(Day), Team.Enemy);
+            EnsureRosterCapacity(units.Count);
+            List<BenchUnit> foes = enemies != null ? enemies.Where(u => u != null && u.data != null).ToList() : GenerateEnemies(Day);
+            if (foes.Count > unitsPerRow * 3) foes = foes.OrderByDescending(u => u.stars * 100 + u.level).Take(unitsPerRow * 3).ToList();
+            foes.Sort((a, b) => FormationRank(a.data).CompareTo(FormationRank(b.data)));
+            SpawnArmy(foes, Team.Enemy);
+            if (armyRows != null)
+            {
+                foreach (ArmyRow row in armyRows)
+                {
+                    if (row != null) ApplyLeader(Team.Player, row.Leader, row.Units.ToList());
+                }
+            }
+            ApplyLeader(Team.Enemy, foes.FirstOrDefault(u => u.IsHeroClass), foes);
             playerStartHp = TotalHp(Team.Player);
             enemyStartHp = TotalHp(Team.Enemy);
 
-            if (slotMachine != null) slotMachine.Prepare(AliveClasses(Team.Player));
+            superReadyAt.Clear();
+            enemySkillTimer = enemySkillInterval * 0.6f;
+            enemySuperTimer = enemySuperInterval * 0.7f;
+            boardClassesKey = -1;
+            boardClasses.Clear();
+            offBoardTimer = offBoardSkillInterval * 0.6f;
+            offBoardTurn = 0;
+            UpdateBoardClassList();
+            if (board != null) board.Begin(BoardClassesWithHero());
+            RefreshBoardClasses();
             UpdateLegend();
             if (arenaRoot != null) arenaRoot.gameObject.SetActive(true);
             if (resultText != null) resultText.text = string.Empty;
@@ -268,7 +391,17 @@ namespace Casiwar
 
             IsRunning = true;
             UpdateStepText();
-            loopRoutine = StartCoroutine(BattleLoop());
+            StartCoroutine(StartRoutine());
+        }
+
+        /// <summary>Поле боя: из ссылки, а нет её — найдётся на сцене; ряды поля идут в OnBoardMatched.</summary>
+        private void EnsureBoard()
+        {
+            if (board == null) board = FindFirstObjectByType<BattleBoard>(FindObjectsInactive.Include);
+            if (board == null || boardHooked) return;
+            boardHooked = true;
+            if (board.city == null) board.city = city;
+            board.Matched += OnBoardMatched;
         }
 
         /// <summary>Кнопка скорости: ×1 → ×2 → ×3 → ×1.</summary>
@@ -278,128 +411,499 @@ namespace Casiwar
             UpdateSpeedLabel();
         }
 
-        private IEnumerator BattleLoop()
+        // =====================================================================
+        //  Бой в реальном времени: бойцы сами, мы — рядами на поле боя
+        // =====================================================================
+
+        /// <summary>У каких классов есть суперудар.</summary>
+        public static readonly UnitClass[] AbilityClasses =
+        {
+            UnitClass.Warrior, UnitClass.Archer, UnitClass.Priest, UnitClass.Bomber, UnitClass.Monk, UnitClass.Mage,
+        };
+
+        /// <summary>Устарело: кнопки ручной крутки, паузы и способностей из старых сцен (прячутся, ничего не делают).</summary>
+        public void RequestSpin() { }
+        public void ToggleAutoSpin() { }
+        public void OrderWarriors() { }
+        public void OrderArchers() { }
+        public void OrderPriests() { }
+        public void UseAbility(int index) { }
+
+        private bool controlsHooked;
+
+        /// <summary>Кнопки старых сцен (крутить, пауза, способности, приказы, боевой дух) — прочь.</summary>
+        private void HookControls()
+        {
+            if (controlsHooked) return;
+            controlsHooked = true;
+            if (moraleText != null) moraleText.gameObject.SetActive(false);
+            if (spinButton != null) spinButton.gameObject.SetActive(false);
+            Button autoButton = autoSpinLabel != null ? autoSpinLabel.GetComponentInParent<Button>(true) : null;
+            if (autoButton != null) autoButton.gameObject.SetActive(false);
+            foreach (Button button in (abilityButtons ?? new Button[0]).Concat(orderButtons ?? new Button[0]))
+            {
+                if (button != null) button.gameObject.SetActive(false);
+            }
+        }
+
+        /// <summary>Суперспособность класса.</summary>
+        public static string SuperName(UnitClass unitClass)
+        {
+            switch (unitClass)
+            {
+                case UnitClass.Warrior: return "Землетрясение";
+                case UnitClass.Archer: return "Огненный дождь";
+                case UnitClass.Priest: return "Воскрешение";
+                case UnitClass.Bomber: return "Пороховая бочка";
+                case UnitClass.Monk: return "Вихрь";
+                case UnitClass.Mage: return "Ледяная буря";
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>Что делает суперспособность — коротко, для легенды.</summary>
+        private string SuperEffect(UnitClass unitClass)
+        {
+            switch (unitClass)
+            {
+                case UnitClass.Warrior: return $"враги в {quakeRadius} кл. — урон и оглушение";
+                case UnitClass.Archer: return $"{fireRainWaves} волны стрел";
+                case UnitClass.Priest: return $"павшие встают ({Mathf.RoundToInt(reviveHp * 100f)}%{GameVisuals.IconHp})";
+                case UnitClass.Bomber: return $"взрыв в {powderRadius} кл.";
+                case UnitClass.Monk: return "бьют всех вокруг";
+                case UnitClass.Mage: return "урон всем и заморозка";
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>«Армии строятся» — и бой пошёл.</summary>
+        private IEnumerator StartRoutine()
         {
             yield return Wait(startDelay);
+            if (!IsRunning) yield break;
+            fighting = true;
+            if (board != null) board.Unlock();
+            UpdateStepText();
             CheckForWinner();
+        }
 
-            while (IsRunning && CurrentStep < maxSteps)
+        /// <summary>Кадр боя: время, бойцы (ходят и бьют по своим таймерам), навыки врага, проверка победы и времени.</summary>
+        private void TickBattle(float dt)
+        {
+            battleTime += dt;
+            foreach (BattleUnit unit in units.ToList())
             {
-                CurrentStep++;
-                UpdateStepText();
-
-                // 1) Ход игрока: видимый спин — каждая волна каскада срабатывает прямо во время анимации
-                if (slotMachine != null)
-                {
-                    yield return slotMachine.StartSpin(this);
-                }
-                else
-                {
-                    SlotSpinResult spin = BattleSlotMachine.RollCascade(new SlotSetup { Threshold = c => SkillThreshold(Team.Player, c) });
-                    foreach (SlotWave wave in spin.Waves) ResolveWave(Team.Player, wave);
-                }
-                EndTurn(Team.Player);
-                yield return Wait(actionPause);
-                CheckForWinner();
-                if (!IsRunning) break;
-
-                // 2) Ход варваров: такой же слот с каскадами, только скрытый
-                SlotSpinResult enemySpin = slotMachine != null
-                    ? slotMachine.SimulateSpin(EnemySlotSize(), AliveClasses(Team.Enemy), c => EnemyClassLevel, c => SkillThreshold(Team.Enemy, c))
-                    : BattleSlotMachine.RollCascade(new SlotSetup { Threshold = c => SkillThreshold(Team.Enemy, c) });
-                var enemyParts = new List<string>();
-                foreach (SlotWave wave in enemySpin.Waves)
-                {
-                    if (CountAlive(Team.Player) == 0 || CountAlive(Team.Enemy) == 0) break;
-                    enemyParts.Add(ResolveWave(Team.Enemy, wave));
-                }
-                if (enemyTurnText != null) enemyTurnText.text = $"Варвары: {string.Join("  |  ", enemyParts)}";
-                EndTurn(Team.Enemy);
-                yield return Wait(actionPause);
-                CheckForWinner();
+                if (!IsRunning) return;
+                if (!unit.IsDead) unit.Tick(dt);
             }
+            if (!IsRunning) return;
+            EnemyAbilities(dt);
+            OffBoardSkills(dt);
+            CheckForWinner();
+            if (IsRunning && battleTime >= battleDuration) FinishBattle(PlayerWinsOnTimeout(), timeout: true);
+            if (IsRunning) RefreshBoardClasses();
+        }
 
-            loopRoutine = null;
-            if (IsRunning) FinishBattle(PlayerWinsOnTimeout(), timeout: true);
+        /// <summary>Секунд между ударами бойца: стрелки — чуть реже, богатырь — чаще.</summary>
+        public float AttackIntervalOf(BattleUnit unit)
+        {
+            float interval = attackInterval * (unit.AttackRange > 1 ? 1.15f : 1f);
+            if (unit.Data != null && unit.Data.unitClass == UnitClass.Hero) interval *= 0.85f;
+            if (unit.Team == Team.Player && city != null && unit.Data != null)
+                interval *= 1f - Mathf.Clamp(city.ClassEffect(CityEffect.Haste, unit.Data.unitClass), 0f, 0.6f);
+            return interval;
+        }
+
+        /// <summary>Класс вымер (или ожил) — поле боя меняет, чьи символы падают, легенда — что они делают.</summary>
+        private void RefreshBoardClasses()
+        {
+            bool changed = UpdateBoardClassList();
+            int key = 0;
+            foreach (UnitClass unitClass in AliveClasses(Team.Player)) key |= 1 << (int)unitClass;
+            if (key == boardClassesKey && !changed) return;
+            boardClassesKey = key;
+            if (board != null) board.SetClasses(BoardClassesWithHero());
+            UpdateLegend();
         }
 
         /// <summary>
-        /// Применить волну спина за сторону: навыки (набравшие порог) → «Чудо» → ➜ перемещения → ⚔ атаки.
-        /// Сила — множитель каскада × множители рядом с кластером. Возвращает короткий итог для UI.
+        /// Классы на поле: самые многочисленные, не больше BattleBoard.maxClassSymbols. Состав держится, пока класс жив,
+        /// — вымер, и его место занимает следующий. true — состав поменялся.
         /// </summary>
-        public string ResolveWave(Team team, SlotWave wave)
+        private bool UpdateBoardClassList()
         {
-            var parts = new List<string>();
-
-            // 1) Массовые навыки классов
-            foreach (KeyValuePair<UnitClass, SlotCluster> skill in wave.Skills)
+            List<UnitClass> alive = AliveClasses(Team.Player).Where(c => BattleBoard.SymbolFor(c) != BattleSymbol.Blank).ToList();
+            bool changed = boardClasses.RemoveAll(c => !alive.Contains(c)) > 0;
+            int max = board != null ? board.maxClassSymbols : 3;
+            foreach (UnitClass unitClass in alive.Where(c => !boardClasses.Contains(c))
+                         .OrderByDescending(c => CountAlive(Team.Player, c)).ThenBy(c => (int)c).ToList())
             {
-                UnitClass unitClass = skill.Key;
-                if (CountAlive(team, unitClass) == 0) continue;
-                int need = SkillThreshold(team, unitClass);
-                float power = (1f + Mathf.Max(0, skill.Value.Size - need) * powerPerExtraSymbol) * SkillPower(team, unitClass) * wave.PowerOf(skill.Value);
-                TriggerClassSkill(team, unitClass, power);
-                parts.Add($"{SkillTitle(team, unitClass)}{PowerTag(wave.PowerOf(skill.Value))}!");
+                if (boardClasses.Count >= max) break;
+                boardClasses.Add(unitClass);
+                changed = true;
             }
-
-            // 2) «Чудо»: 3+ Свечи в любом месте поля
-            if (wave.Miracle && CountAlive(team) > 0)
-            {
-                Miracle(team, wave.Relics.Count, wave.Index);
-                parts.Add($"Чудо{PowerTag(wave.Index)}!");
-            }
-
-            // 3) Перемещения: столько случайных юнитов, сколько символов в самом большом кластере ➜
-            int moved = 0;
-            foreach (BattleUnit unit in PickRandom(team, wave.Move?.Size ?? 0, u => u.WantsToMove()))
-            {
-                unit.MoveAction();
-                moved++;
-            }
-
-            // 4) Атаки: столько случайных юнитов, сколько символов в самом большом кластере ⚔; урон × сила кластера
-            int attacked = 0;
-            int attackPower = wave.PowerOf(wave.Attack);
-            foreach (BattleUnit unit in PickRandom(team, wave.Attack?.Size ?? 0, u => u.HasTargetInRange()))
-            {
-                unit.AttackAction(attackPower);
-                attacked++;
-            }
-
-            parts.Insert(0, $"{GameVisuals.IconAttack} {attacked}{PowerTag(attackPower)} · {GameVisuals.IconMove} {moved}");
-            string summary = string.Join(" · ", parts);
-            return wave.Index > 1 ? $"Каскад ×{wave.Index}: {summary}" : summary;
+            return changed;
         }
 
-        private static string PowerTag(int power) => power > 1 ? $" ×{power}" : string.Empty;
+        /// <summary>Для поля: классы с символами + богатырь, если жив (его «Знамя» — джокеры).</summary>
+        private List<UnitClass> BoardClassesWithHero()
+        {
+            var classes = new List<UnitClass>(boardClasses);
+            if (CountAlive(Team.Player, UnitClass.Hero) > 0) classes.Add(UnitClass.Hero);
+            return classes;
+        }
 
-        /// <summary>«Чудо»: все свои лечатся и получают благословение. Свечи сверх трёх и множитель каскада усиливают.</summary>
-        private void Miracle(Team team, int relics, int waveIndex)
+        /// <summary>Классы, которым не хватило места на поле: применяют навык сами раз в offBoardSkillInterval.</summary>
+        private List<UnitClass> OffBoardClasses() => AliveClasses(Team.Player)
+            .Where(c => BattleBoard.SymbolFor(c) != BattleSymbol.Blank && !boardClasses.Contains(c)).OrderBy(c => (int)c).ToList();
+
+        private void OffBoardSkills(float dt)
+        {
+            offBoardTimer -= dt;
+            if (offBoardTimer > 0f) return;
+            offBoardTimer = offBoardSkillInterval;
+            List<UnitClass> classes = OffBoardClasses().Where(c => Ready(Team.Player, c).Count > 0).ToList();
+            if (classes.Count == 0) return;
+            UnitClass unitClass = classes[offBoardTurn++ % classes.Count];
+            ActionTally done = Tallied(Team.Player, () => TriggerClassSkill(Team.Player, unitClass, SkillPower(Team.Player, unitClass)));
+            if (board != null)
+                board.ShowTopAction(SkillTitle(Team.Player, unitClass), GameVisuals.ClassColor(unitClass), enemy: false);
+        }
+
+        /// <summary>
+        /// Ряд на поле боя: ⚔ — натиск, ➜ — марш, символ класса — его навык (5+ — суперудар), 🕯 — «Чудо».
+        /// Сила — длина ряда × волна каскада × ×2 в ряду.
+        /// </summary>
+        private void OnBoardMatched(BoardMatch match)
+        {
+            if (!IsRunning || !fighting || match == null) return;
+            float power = MatchPower(match);
+            string text = string.Empty, word = string.Empty;
+            bool super = false;
+            ActionTally tally = Tallied(Team.Player, () =>
+            {
+            switch (match.Symbol)
+            {
+                case BattleSymbol.Attack:
+                    bool hit = Assault(Team.Player, power);
+                    text = hit ? $"{GameVisuals.IconAttack} Натиск{PowerTag(power)}!" : $"{GameVisuals.IconAttack} До врага не достают — шагают к нему";
+                    word = hit ? "Натиск" : "Вперёд";
+                    break;
+                case BattleSymbol.Move:
+                    int cells = Mathf.Max(1, match.Length - 1);
+                    March(Team.Player, cells);
+                    text = $"{GameVisuals.IconMove} Марш на {cells}!";
+                    word = "Марш";
+                    break;
+                case BattleSymbol.Relic:
+                    Miracle(Team.Player, MiraclePower(Team.Player, match.Length) * (1f + (match.Wave - 1) * cascadeBonus) * match.Multiplier);
+                    text = $"{GameVisuals.IconCandle} Чудо{PowerTag(power)}!";
+                    word = "Чудо";
+                    break;
+                case BattleSymbol.Blank:
+                    break;
+                default:
+                    text = ClassMatch(BattleBoard.ClassOf(match.Symbol), match, power, out word, out super);
+                    break;
+            }
+            });
+            if (text.Length == 0) return;
+            if (match.Wave > 1) text = $"<color=#ffd166>каскад ×{match.Wave}</color> {text}";
+            // На поле — одно слово и вспышка, подробности (урон, добитые…) — строкой под полем
+            if (board != null && board.resultText != null) board.resultText.text = $"{text}  <size=80%>{tally.Text()}</size>";
+            if (board != null) board.ShowOutcome(match.Cells, word, OutcomeColor(match.Symbol), super, tally.Empty);
+            CheckForWinner();
+        }
+
+        /// <summary>
+        /// Что сделало на арене одно действие (ряд с поля три в ряд или навык врага): урон, добитые, оглушённые,
+        /// лечение… BattleUnit пишет сюда, пока действие идёт, — итог показывается табличкой прямо на поле.
+        /// </summary>
+        public sealed class ActionTally
+        {
+            private readonly Team side;
+            private float damage, healed;
+            private int kills, revived;
+            private readonly HashSet<BattleUnit> stunned = new HashSet<BattleUnit>();
+            private readonly HashSet<BattleUnit> burning = new HashSet<BattleUnit>();
+            private readonly HashSet<BattleUnit> buffed = new HashSet<BattleUnit>();
+            public int Moved;
+
+            public ActionTally(Team side) => this.side = side;
+
+            /// <summary>Ничего не вышло: ни урона, ни лечения, ни эффектов, никто не сдвинулся.</summary>
+            public bool Empty => damage < 1f && healed < 1f && kills == 0 && revived == 0 && stunned.Count == 0 &&
+                                 burning.Count == 0 && buffed.Count == 0 && Moved == 0;
+
+            public void Hit(BattleUnit victim, float dealt, bool killed)
+            {
+                if (victim.Team == side) return;
+                damage += dealt;
+                if (killed) kills++;
+            }
+
+            public void Healed(BattleUnit unit, float amount) { if (unit.Team == side) healed += amount; }
+            public void Revived(BattleUnit unit) { if (unit.Team == side) revived++; }
+            public void Stunned(BattleUnit unit) { if (unit.Team != side) stunned.Add(unit); }
+            public void Burned(BattleUnit unit) { if (unit.Team != side) burning.Add(unit); }
+            public void Buffed(BattleUnit unit) { if (unit.Team == side) buffed.Add(unit); }
+
+            /// <summary>«−124 урона · добито 2 · оглушено 3 · +60 лечения»; ничего не вышло — «без толку».</summary>
+            public string Text()
+            {
+                var parts = new List<string>();
+                if (damage >= 1f) parts.Add($"<color=#ff9e80>−{Mathf.RoundToInt(damage)} урона</color>");
+                if (kills > 0) parts.Add($"<color=#ff6e6e>{GameVisuals.IconDead} {(side == Team.Player ? "добито" : "погибло")} {kills}</color>");
+                if (stunned.Count > 0) parts.Add($"<color=#b3e5fc>оглушено {stunned.Count}</color>");
+                if (burning.Count > 0) parts.Add($"<color=#ffb74d>горят {burning.Count}</color>");
+                if (healed >= 1f) parts.Add($"<color=#a5f2a5>+{Mathf.RoundToInt(healed)} лечения</color>");
+                if (revived > 0) parts.Add($"<color=#fff3b0>воскресли {revived}</color>");
+                if (buffed.Count > 0) parts.Add($"<color=#fff3b0>усилены {buffed.Count}</color>");
+                if (Moved > 0) parts.Add($"<color=#b3d9ff>{GameVisuals.IconMove} двинулись {Moved}</color>");
+                return parts.Count > 0 ? string.Join(" · ", parts) : "<color=#9e9e9e>без толку</color>";
+            }
+        }
+
+        /// <summary>Идёт действие, которое считается для таблички на поле (null — не считаем).</summary>
+        public ActionTally Tally { get; private set; }
+
+        /// <summary>Выполнить действие стороны и посчитать, что оно сделало (кто сдвинулся — по клеткам до и после).</summary>
+        private ActionTally Tallied(Team team, Action action)
+        {
+            Dictionary<BattleUnit, Vector2Int> cells = Alive(team).ToDictionary(u => u, u => u.Cell);
+            var tally = new ActionTally(team);
+            ActionTally outer = Tally;
+            Tally = tally;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                Tally = outer;
+            }
+            tally.Moved = cells.Count(pair => !pair.Key.IsDead && pair.Key.Cell != pair.Value);
+            return tally;
+        }
+
+        /// <summary>Цвет рамки таблички на поле: класс — его цвет.</summary>
+        private static Color OutcomeColor(BattleSymbol symbol)
+        {
+            switch (symbol)
+            {
+                case BattleSymbol.Attack: return new Color(1f, 0.8f, 0.45f);
+                case BattleSymbol.Move: return new Color(0.55f, 0.8f, 1f);
+                case BattleSymbol.Relic: return new Color(1f, 0.95f, 0.7f);
+                default: return GameVisuals.ClassColor(BattleBoard.ClassOf(symbol));
+            }
+        }
+
+        /// <summary>Сила ряда: 3 — ×1, каждый символ сверх — +lengthBonus, волна каскада — +cascadeBonus, ×2 в ряду.</summary>
+        private float MatchPower(BoardMatch match) =>
+            (1f + Mathf.Max(0, match.Length - 3) * lengthBonus) * (1f + (match.Wave - 1) * cascadeBonus) * match.Multiplier;
+
+        /// <summary>Ряд символов класса: навык; 5+ в ряд — суперудар (открыт приказом гильдии и не перезаряжается).</summary>
+        private string ClassMatch(UnitClass unitClass, BoardMatch match, float power, out string word, out bool super)
+        {
+            string icon = GameVisuals.ClassIcon(unitClass);
+            super = false;
+            if (Ready(Team.Player, unitClass).Count == 0)
+            {
+                bool alive = CountAlive(Team.Player, unitClass) > 0;
+                word = alive ? "Оглушены" : "Некому";
+                return alive ? $"{icon} оглушены — навык пропал" : $"{icon} их в бою уже нет";
+            }
+            bool hasSuper = Array.IndexOf(AbilityClasses, unitClass) >= 0;
+            int superLength = SuperLength(unitClass);
+            CastRunes(unitClass);
+            if (match.Length >= superLength && hasSuper && SuperUnlocked(Team.Player, unitClass) && SuperReady(Team.Player, unitClass))
+            {
+                float superPower = Mathf.Min(superPowerCap,
+                    (1f + (match.Length - superLength) * lengthBonus) * (1f + (match.Wave - 1) * cascadeBonus) * match.Multiplier);
+                superReadyAt[(Team.Player, unitClass)] = battleTime + SuperCooldown(Team.Player);
+                SuperShow(Team.Player, unitClass);
+                TriggerSuper(Team.Player, unitClass, superPower);
+                word = SuperName(unitClass);
+                super = true;
+                return $"<color=#ffd166>{SuperName(unitClass)}!</color>";
+            }
+            TriggerClassSkill(Team.Player, unitClass, power * SkillPower(Team.Player, unitClass));
+            word = SkillTitle(Team.Player, unitClass);
+            string note = string.Empty;
+            if (match.Length >= superLength && hasSuper)
+                note = !SuperUnlocked(Team.Player, unitClass) ? " <size=80%>(суперудар — приказ в гильдии)</size>"
+                    : !SuperReady(Team.Player, unitClass) ? " <size=80%>(суперудар перезаряжается)</size>" : string.Empty;
+            return $"{icon} {SkillTitle(Team.Player, unitClass)}{PowerTag(power)}!{note}";
+        }
+
+        /// <summary>Сколько символов класса в ряд нужно на суперудар: 5, а с вершиной ветки в «Войсках» — 4.</summary>
+        public int SuperLength(UnitClass unitClass) =>
+            city != null && city.ClassEffect(CityEffect.SuperAt4, unitClass) > 0f ? 4 : 5;
+
+        /// <summary>«Руны» магов: ряд их символов превращает несколько фишек поля боя в символы магов.</summary>
+        private void CastRunes(UnitClass unitClass)
+        {
+            int runes = city != null ? Mathf.RoundToInt(city.ClassEffect(CityEffect.Runes, unitClass)) : 0;
+            if (runes > 0 && board != null) board.Inject(BattleBoard.SymbolFor(unitClass), runes);
+        }
+
+        /// <summary>Боец добил врага: «Знамёна полков» — воин лечится.</summary>
+        public void OnKill(BattleUnit killer, BattleUnit victim)
+        {
+            if (killer == null || killer.Team != Team.Player || city == null || killer.IsDead) return;
+            float heal = city.ClassEffect(CityEffect.Bloodlust, killer.Data.unitClass);
+            if (heal > 0f) killer.Heal(killer.MaxHp * heal);
+        }
+
+        /// <summary>Эффект дерева «Войск» для нашего бойца (по его классу); у врага — 0.</summary>
+        public float PlayerEffect(BattleUnit unit, CityEffect effect) =>
+            unit != null && unit.Team == Team.Player && city != null && unit.Data != null ? city.ClassEffect(effect, unit.Data.unitClass) : 0f;
+
+        /// <summary>«Внутренний огонь»: под «Огненными клинками» наши лечатся на эту долю урона.</summary>
+        public float Lifesteal => city != null ? city.ClassEffect(CityEffect.Lifesteal, UnitClass.None) : 0f;
+
+        /// <summary>Рядом стоит живой союзник этого класса («Фаланга»).</summary>
+        public bool HasAdjacentAlly(BattleUnit unit, UnitClass unitClass) =>
+            units.Any(u => u != unit && !u.IsDead && u.Team == unit.Team && u.Data.unitClass == unitClass && Distance(u.Cell, unit.Cell) <= 1);
+
+        /// <summary>Шанс нашего бойца ударить второй раз («Вихрь ударов» монахов).</summary>
+        public float DoubleStrikeChance(BattleUnit unit) =>
+            unit.Team == Team.Player && city != null ? Mathf.Clamp01(city.ClassEffect(CityEffect.DoubleStrike, unit.Data.unitClass)) : 0f;
+
+        /// <summary>Натиск: все, кто достаёт до врага, бьют разом; кто не достаёт — шаг к врагу. false — бить было некому.</summary>
+        private bool Assault(Team team, float power)
+        {
+            bool any = false;
+            foreach (BattleUnit unit in Alive(team))
+            {
+                if (unit.IsStunned) continue;
+                if (unit.HasTargetInRange())
+                {
+                    unit.AttackAction(power * assaultPower);
+                    any = true;
+                }
+                else if (unit.WantsToMove())
+                {
+                    unit.MoveAction(1);
+                }
+            }
+            if (any) SkillBanner(Alive(team), "НАТИСК!", new Color(1f, 0.85f, 0.55f));
+            return any;
+        }
+
+        /// <summary>Марш: все, кто не достаёт до врага, разом идут к нему на cells клеток (ближние первыми).</summary>
+        private void March(Team team, int cells)
+        {
+            int DistanceToEnemy(BattleUnit unit)
+            {
+                BattleUnit enemy = FindNearestEnemy(unit);
+                return enemy != null ? Distance(enemy.Cell, unit.Cell) : int.MaxValue;
+            }
+            foreach (BattleUnit unit in Alive(team).OrderBy(DistanceToEnemy).ToList())
+            {
+                if (!unit.IsStunned && unit.WantsToMove()) unit.MoveAction(cells, fast: true);
+            }
+        }
+
+        /// <summary>
+        /// Враг применяет навыки сам: раз в enemySkillInterval (± разброс) — навык случайного своего класса,
+        /// с enemySuperDay — ещё и суперудар самого многочисленного класса раз в enemySuperInterval.
+        /// </summary>
+        private void EnemyAbilities(float dt)
+        {
+            enemySkillTimer -= dt;
+            if (enemySkillTimer <= 0f)
+            {
+                enemySkillTimer = Mathf.Max(1f, enemySkillInterval + Random.Range(-enemySkillJitter, enemySkillJitter));
+                List<UnitClass> classes = AliveClasses(Team.Enemy).Where(c => SkillEffect(c).Length > 0 && Ready(Team.Enemy, c).Count > 0).ToList();
+                if (classes.Count > 0)
+                {
+                    UnitClass unitClass = classes[Random.Range(0, classes.Count)];
+                    ActionTally done = Tallied(Team.Enemy, () => TriggerClassSkill(Team.Enemy, unitClass, SkillPower(Team.Enemy, unitClass)));
+                    EnemySays($"{GameVisuals.ClassIcon(unitClass)} {SkillTitle(Team.Enemy, unitClass)}!", SkillTitle(Team.Enemy, unitClass), done);
+                }
+            }
+            if (Day < enemySuperDay) return;
+            enemySuperTimer -= dt;
+            if (enemySuperTimer > 0f) return;
+            enemySuperTimer = Mathf.Max(5f, enemySuperInterval + Random.Range(-enemySkillJitter, enemySkillJitter));
+            UnitClass best = AliveClasses(Team.Enemy).Where(c => Array.IndexOf(AbilityClasses, c) >= 0 && Ready(Team.Enemy, c).Count > 0)
+                .OrderByDescending(c => CountAlive(Team.Enemy, c)).FirstOrDefault();
+            if (best == UnitClass.None) return;
+            ActionTally strike = Tallied(Team.Enemy, () =>
+            {
+                SuperShow(Team.Enemy, best);
+                TriggerSuper(Team.Enemy, best, 1f);
+            });
+            EnemySays($"<color=#ffd166>{SuperName(best)}!</color>", SuperName(best), strike);
+        }
+
+        /// <summary>Навык врага: строкой у арены и табличкой сверху поля три в ряд (с тем, что он нам сделал).</summary>
+        private void EnemySays(string text, string word, ActionTally done)
+        {
+            if (enemyTurnText != null) enemyTurnText.text = $"<color=#ff8a80>Враг:</color> {text} <size=80%>{done.Text()}</size>";
+            if (board != null) board.ShowTopAction($"Враг: {word}", new Color(1f, 0.4f, 0.35f), enemy: true);
+        }
+
+        private static string PowerTag(float power) => power > 1.05f ? $" ×{power:0.#}" : string.Empty;
+
+        /// <summary>Сила «Чуда»: свечи сверх трёх и «Святые мощи».</summary>
+        private float MiraclePower(Team team, int relics) =>
+            (1f + Mathf.Max(0, relics - 3) * miracleExtraPerRelic) * (team == Team.Player && city != null ? city.MiracleMultiplier : 1f);
+
+        /// <summary>«Чудо»: все свои лечатся и получают благословение.</summary>
+        private void Miracle(Team team, float power)
         {
             List<BattleUnit> allies = Alive(team);
             if (allies.Count == 0) return;
-            float power = (1f + Mathf.Max(0, relics - 3) * miracleExtraPerRelic) * waveIndex
-                          * (team == Team.Player && city != null ? city.MiracleMultiplier : 1f);
             foreach (BattleUnit ally in allies)
             {
                 ally.Heal(ally.MaxHp * miracleHealShare * power);
-                ally.ApplyBlessing(CurrentStep + blessingSteps - 1, blessingReduction);
+                ally.ApplyBlessing(CurrentStep + blessingSeconds, blessingReduction);
                 BattleVfx.Ring(ally.Position, 0.45f, new Color(1f, 0.95f, 0.7f, 0.7f), 0.5f);
             }
             SkillBanner(allies, "ЧУДО!", new Color(1f, 0.95f, 0.7f));
         }
 
-        /// <summary>Сколько символов нужно в кластере класса: не меньше, чем его юнитов в бою (и не меньше минимума).</summary>
-        public int SkillThreshold(Team team, UnitClass unitClass)
+        /// <summary>Суперудар класса открыт: у нас — приказом гильдии (гибридам — любой родительской), у врага — всегда.</summary>
+        public bool SuperUnlocked(Team team, UnitClass unitClass)
         {
-            int minimum = slotMachine != null ? slotMachine.minSkillCluster : 3;
-            return Mathf.Max(minimum, CountAlive(team, unitClass));
+            if (team == Team.Enemy) return true;
+            if (city == null) return false;
+            return UnitClasses.IsHybrid(unitClass) ? UnitClasses.Parents(unitClass).Any(city.HasOrder) : city.HasOrder(unitClass);
         }
 
-        /// <summary>Ход стороны закончился: оглушённые ею пропущенный ход «отбыли».</summary>
-        private void EndTurn(Team team)
+        /// <summary>Класс стороны не перезаряжается после прошлого суперудара.</summary>
+        private bool SuperReady(Team team, UnitClass unitClass) =>
+            !superReadyAt.TryGetValue((team, unitClass), out float at) || battleTime >= at;
+
+        /// <summary>Перезарядка суперудара (наша «Выдержка» — быстрее).</summary>
+        private float SuperCooldown(Team team) =>
+            superCooldownSeconds * (team == Team.Player && city != null && city.FasterSupers ? fasterSupersShare : 1f);
+
+        /// <summary>Суперудар: вспышка цвета класса на всю арену и крупное название (у врага — «ВРАГ:»).</summary>
+        private void SuperShow(Team team, UnitClass unitClass)
         {
-            foreach (BattleUnit unit in Alive(team)) unit.EndOwnTurn();
+            Color color = Color.Lerp(GameVisuals.ClassColor(unitClass), Color.white, 0.35f);
+            Vector2 center = transform.position;
+            Color flash = team == Team.Player ? color : Color.Lerp(color, new Color(1f, 0.25f, 0.2f), 0.5f);
+            flash.a = 0.32f;
+            BattleVfx.Flash(center, new Vector2(columns * cellSize, rows * cellSize), flash, 0.7f);
+            string title = $"{SuperName(unitClass).ToUpperInvariant()}!";
+            BattleVfx.FloatingText(center + Vector2.up * 0.4f, team == Team.Player ? title : $"<size=70%>ВРАГ:</size>\n{title}",
+                team == Team.Player ? new Color(1f, 0.88f, 0.4f) : new Color(1f, 0.6f, 0.55f), 4.6f, 1.8f, outline: true);
+        }
+
+        /// <summary>«День угрозы» хода: по нему растут враги (50 ходов — примерно 23 дня прежнего темпа).</summary>
+        public int ThreatDay(int turn) => 1 + Mathf.FloorToInt(Mathf.Max(0, turn - 1) * difficultyPerTurn);
+
+        /// <summary>Удары по зданиям, если город грабят без боя (армия в поле): как у уцелевших в бою врагов.</summary>
+        public List<float> RaidHits(IEnumerable<BenchUnit> raiders, int turn)
+        {
+            float multiplier = 1f + (ThreatDay(turn) - 1) * enemyStatsGrowthPerDay;
+            return raiders.Where(u => u?.data != null)
+                .Select(u => (u.Attack * raidAttackMultiplier + u.MaxHp * raidHpShare) * multiplier)
+                .ToList();
         }
 
         /// <summary>Название навыка класса для стороны: воины без щитов делают «Рывок», со щитами — «Таран щитом».</summary>
@@ -459,25 +963,6 @@ namespace Casiwar
             return 1f + 0.25f * EnemyClassLevel;
         }
 
-        private int EnemySlotSize()
-        {
-            int baseSize = slotMachine != null ? slotMachine.baseSize : 4;
-            int maxSize = slotMachine != null ? slotMachine.maxSize : 7;
-            return Mathf.Clamp(baseSize + (Day - 1) / enemySlotGrowthEveryDays, baseSize, maxSize);
-        }
-
-        private List<BattleUnit> PickRandom(Team team, int count, Predicate<BattleUnit> eligible)
-        {
-            var pool = units.Where(u => !u.IsDead && u.Team == team && eligible(u)).ToList();
-            for (int i = pool.Count - 1; i > 0; i--)
-            {
-                int j = Random.Range(0, i + 1);
-                (pool[i], pool[j]) = (pool[j], pool[i]);
-            }
-            if (pool.Count > count) pool.RemoveRange(count, pool.Count - count);
-            return pool;
-        }
-
         private void CheckForWinner()
         {
             if (!IsRunning) return;
@@ -497,6 +982,8 @@ namespace Casiwar
         {
             if (!IsRunning) return;
             IsRunning = false;
+            fighting = false;
+            if (board != null) board.End();
             if (resultText != null) resultText.text = victory ? "ПОБЕДА!" : "ПОРАЖЕНИЕ";
             if (timeout && stepText != null) stepText.text = "Время вышло — решает оставшееся ХП";
 
@@ -505,17 +992,22 @@ namespace Casiwar
             {
                 Victory = victory,
                 Survivors = CountAlive(Team.Player),
-                SurvivorStars = units.Where(u => !u.IsDead && u.Team == Team.Player).Sum(u => u.Stars),
+                KilledStars = units.Where(u => u.IsDead && u.Team == Team.Enemy).Sum(u => u.Stars),
             };
             foreach (BattleUnit unit in units)
             {
                 if (unit.Team == Team.Player && unit.Source != null)
                     outcome.PlayerUnits.Add(new UnitBattleResult { Unit = unit.Source, Alive = !unit.IsDead, Kills = unit.Kills });
             }
-            if (!victory)
+            foreach (BattleUnit enemy in units.Where(u => u.Team == Team.Enemy))
             {
-                foreach (BattleUnit enemy in Alive(Team.Enemy))
-                    outcome.RaidHits.Add(enemy.AttackDamage * raidAttackMultiplier + enemy.Hp * raidHpShare);
+                if (enemy.IsDead)
+                {
+                    if (enemy.Source != null) outcome.EnemyFallen.Add(enemy.Source);
+                    continue;
+                }
+                if (enemy.Source != null) outcome.EnemySurvivors.Add(enemy.Source);
+                if (!victory) outcome.RaidHits.Add(enemy.AttackDamage * raidAttackMultiplier + enemy.Hp * raidHpShare);
             }
             StartCoroutine(EndRoutine(outcome));
         }
@@ -524,12 +1016,9 @@ namespace Casiwar
         {
             yield return Wait(endDelay);
 
-            if (loopRoutine != null)
-            {
-                StopCoroutine(loopRoutine);
-                loopRoutine = null;
-            }
-            if (slotMachine != null) slotMachine.ResetGrid();
+            superReadyAt.Clear();
+            leaders.Clear();
+            if (board != null) board.End();
             ClearUnits();
             if (arenaRoot != null) arenaRoot.gameObject.SetActive(false);
             if (resultText != null) resultText.text = string.Empty;
@@ -553,6 +1042,156 @@ namespace Casiwar
         // =====================================================================
         //  Массовые навыки
         // =====================================================================
+
+        /// <summary>Суперудар класса (срабатывает сам). Богатырь бьёт вместе с ним.</summary>
+        public void TriggerSuper(Team team, UnitClass unitClass, float power)
+        {
+            switch (unitClass)
+            {
+                case UnitClass.Warrior: Earthquake(team, power); break;
+                case UnitClass.Archer: FireRain(team, power); break;
+                case UnitClass.Priest: Resurrection(team, power); break;
+                case UnitClass.Bomber: PowderKeg(team, power); break;
+                case UnitClass.Monk: Whirlwind(team, power); break;
+                case UnitClass.Mage: FrostStorm(team, power); break;
+            }
+            HeroesJoin(team);
+        }
+
+        /// <summary>«Землетрясение»: каждый воин бьёт оземь — враги рядом (quakeRadius) получают урон и оглушены.</summary>
+        private void Earthquake(Team team, float power)
+        {
+            List<BattleUnit> warriors = Ready(team, UnitClass.Warrior);
+            if (warriors.Count == 0) return;
+            foreach (BattleUnit warrior in warriors)
+                BattleVfx.Ring(warrior.Position, cellSize * (quakeRadius + 0.5f) * 2f, new Color(0.75f, 0.55f, 0.3f, 0.4f), 0.6f);
+            foreach (BattleUnit enemy in Alive(Opposite(team)))
+            {
+                BattleUnit striker = warriors.Where(w => Distance(w.Cell, enemy.Cell) <= quakeRadius).OrderByDescending(w => w.AttackDamage).FirstOrDefault();
+                if (striker == null) continue;
+                striker.DealDamage(enemy, striker.AttackDamage * quakePower * power, ignoreArmor: false);
+                enemy.Stun(quakeStunTurns);
+            }
+            SkillBanner(warriors, "ЗЕМЛЕТРЯСЕНИЕ!", new Color(0.95f, 0.7f, 0.4f));
+        }
+
+        /// <summary>«Огненный дождь»: несколько волн — в каждой каждый лучник бьёт горящей стрелой случайного врага (щит не ловит).</summary>
+        private void FireRain(Team team, float power)
+        {
+            List<BattleUnit> archers = Ready(team, UnitClass.Archer);
+            for (int wave = 0; wave < fireRainWaves; wave++)
+            {
+                foreach (BattleUnit archer in archers)
+                {
+                    List<BattleUnit> enemies = Alive(Opposite(team));
+                    if (enemies.Count == 0) break;
+                    BattleUnit target = enemies[Random.Range(0, enemies.Count)];
+                    Vector2 sky = target.Position + new Vector2(Random.Range(-0.6f, 0.6f), 2.2f + wave * 0.4f);
+                    BattleVfx.Bolt(sky, target.Position, new Color(1f, 0.55f, 0.15f, 0.95f), 0.09f, 0.3f + wave * 0.12f);
+                    archer.DealDamage(target, archer.AttackDamage * fireRainPower * power, ignoreArmor: false);
+                }
+            }
+            if (archers.Count > 0) SkillBanner(archers, "ОГНЕННЫЙ ДОЖДЬ!", new Color(1f, 0.6f, 0.2f));
+        }
+
+        /// <summary>«Воскрешение»: павшие встают (по одному на жреца, сильнейшие первыми); павших нет — все лечатся на reviveHealShare.</summary>
+        private void Resurrection(Team team, float power)
+        {
+            List<BattleUnit> priests = Ready(team, UnitClass.Priest);
+            if (priests.Count == 0) return;
+            List<BattleUnit> fallen = units.Where(u => u.IsDead && u.Team == team)
+                .OrderByDescending(u => u.Stars * 100 + u.Level).Take(priests.Count).ToList();
+            int raised = 0;
+            foreach (BattleUnit dead in fallen)
+            {
+                Vector2Int? cell = FreeCellNear(dead.Cell, team);
+                if (!cell.HasValue) break;
+                occupancy[cell.Value.x, cell.Value.y] = dead;
+                dead.Revive(cell.Value, Mathf.Clamp01(reviveHp * power));
+                raised++;
+            }
+            if (raised == 0)
+            {
+                foreach (BattleUnit ally in Alive(team))
+                {
+                    ally.Heal(ally.MaxHp * Mathf.Clamp01(reviveHealShare * power));
+                    BattleVfx.Ring(ally.Position, 0.45f, new Color(1f, 0.95f, 0.7f, 0.8f), 0.5f);
+                }
+            }
+            SkillBanner(priests, raised > 0 ? "ВОСКРЕШЕНИЕ!" : "БЛАГОДАТЬ!", new Color(1f, 0.95f, 0.7f));
+        }
+
+        /// <summary>Свободная клетка поближе к from (на своей половине арены — у края своей стороны). null — нет места.</summary>
+        private Vector2Int? FreeCellNear(Vector2Int from, Team team)
+        {
+            Vector2Int? best = null;
+            int bestScore = int.MaxValue;
+            for (int x = 0; x < columns; x++)
+            {
+                for (int y = 0; y < rows; y++)
+                {
+                    var cell = new Vector2Int(x, y);
+                    if (!IsFree(cell)) continue;
+                    int depth = team == Team.Player ? y : rows - 1 - y; // чем ближе к своему краю, тем безопаснее
+                    int score = Distance(cell, from) * 4 + depth;
+                    if (score < bestScore)
+                    {
+                        best = cell;
+                        bestScore = score;
+                    }
+                }
+            }
+            return best;
+        }
+
+        /// <summary>«Пороховая бочка»: подрывники катят бочку в самую плотную кучу врагов — огромный взрыв.</summary>
+        private void PowderKeg(Team team, float power)
+        {
+            List<BattleUnit> bombers = Ready(team, UnitClass.Bomber);
+            List<BattleUnit> enemies = Alive(Opposite(team));
+            if (bombers.Count == 0 || enemies.Count == 0) return;
+            BattleUnit center = enemies.OrderByDescending(e => enemies.Count(o => Distance(o.Cell, e.Cell) <= powderRadius)).First();
+            float damage = bombers.Sum(b => b.AttackDamage) * powderPower * power;
+            BattleVfx.Ring(center.Position, cellSize * (powderRadius * 2 + 1), new Color(1f, 0.5f, 0.1f, 0.85f), 0.7f);
+            BattleVfx.Ring(center.Position, cellSize * powderRadius, new Color(1f, 0.85f, 0.3f, 0.9f), 0.5f);
+            foreach (BattleUnit bomber in bombers) BattleVfx.Bolt(bomber.Position, center.Position, new Color(0.95f, 0.55f, 0.15f, 0.9f), 0.1f, 0.3f);
+            BattleUnit owner = bombers[0];
+            foreach (BattleUnit victim in enemies.Where(e => Distance(e.Cell, center.Cell) <= powderRadius).ToList())
+                owner.DealDamage(victim, damage, ignoreArmor: false);
+            SkillBanner(bombers, "ПОРОХОВАЯ БОЧКА!", new Color(1f, 0.6f, 0.2f));
+        }
+
+        /// <summary>«Вихрь»: каждый монах (подходит к врагу, если рядом никого) бьёт огнём всех врагов вокруг себя по нескольку раз.</summary>
+        private void Whirlwind(Team team, float power)
+        {
+            List<BattleUnit> monks = Ready(team, UnitClass.Monk);
+            foreach (BattleUnit monk in monks)
+            {
+                if (!Alive(Opposite(team)).Any(e => Distance(e.Cell, monk.Cell) <= 1)) monk.MoveAction();
+                BattleVfx.Ring(monk.Position, cellSize * 3f, new Color(1f, 0.45f, 0.15f, 0.8f), 0.45f);
+                foreach (BattleUnit enemy in Alive(Opposite(team)).Where(e => Distance(e.Cell, monk.Cell) <= 1).ToList())
+                {
+                    for (int hit = 0; hit < whirlwindHits; hit++) monk.DealDamage(enemy, monk.AttackDamage * whirlwindPower * power, ignoreArmor: false);
+                }
+            }
+            if (monks.Count > 0) SkillBanner(monks, "ВИХРЬ!", new Color(1f, 0.55f, 0.2f));
+        }
+
+        /// <summary>«Ледяная буря»: все враги получают урон сквозь броню и замерзают (пропускают ход).</summary>
+        private void FrostStorm(Team team, float power)
+        {
+            List<BattleUnit> mages = Ready(team, UnitClass.Mage);
+            if (mages.Count == 0) return;
+            float damage = mages.Sum(m => m.AttackDamage) * frostPower * power;
+            BattleUnit owner = mages[0];
+            foreach (BattleUnit enemy in Alive(Opposite(team)))
+            {
+                BattleVfx.Ring(enemy.Position, 0.55f, new Color(0.6f, 0.9f, 1f, 0.9f), 0.6f);
+                owner.DealDamage(enemy, damage, ignoreArmor: true);
+                enemy.Stun(frostStunTurns);
+            }
+            SkillBanner(mages, "ЛЕДЯНАЯ БУРЯ!", new Color(0.6f, 0.9f, 1f));
+        }
 
         public void TriggerClassSkill(Team team, UnitClass unitClass, float power)
         {
@@ -583,19 +1222,30 @@ namespace Casiwar
         private void Dynamite(Team team, float power)
         {
             List<BattleUnit> bombers = Ready(team, UnitClass.Bomber);
+            int shots = 1 + (team == Team.Player && city != null ? Mathf.RoundToInt(city.ClassEffect(CityEffect.ExtraDynamite, UnitClass.Bomber)) : 0);
+            var struck = new List<Vector2Int>();
             foreach (BattleUnit bomber in bombers)
+            for (int shot = 0; shot < shots; shot++)
             {
                 List<BattleUnit> enemies = Alive(Opposite(team));
                 if (enemies.Count == 0) break;
+                if (shot == 0) struck.Clear();
+                // Вторая шашка («Связки динамита») — в другую кучу, не рядом с первой
                 BattleUnit target = enemies
+                    .Where(e => struck.All(c => Distance(c, e.Cell) > 1))
                     .OrderByDescending(e => enemies.Count(o => Distance(o.Cell, e.Cell) <= 1))
                     .ThenBy(e => Distance(e.Cell, bomber.Cell))
-                    .First();
+                    .FirstOrDefault() ?? enemies[Random.Range(0, enemies.Count)];
+                struck.Add(target.Cell);
                 BattleVfx.Bolt(bomber.Position, target.Position, new Color(0.95f, 0.55f, 0.15f, 0.9f), 0.07f, 0.25f);
                 BattleVfx.Ring(target.Position, cellSize * 1.4f, new Color(1f, 0.55f, 0.15f, 0.75f), 0.45f);
                 float damage = bomber.AttackDamage * dynamiteMultiplier * power;
+                bool shock = team == Team.Player && city != null && city.ClassEffect(CityEffect.Shockwave, UnitClass.Bomber) > 0f;
                 foreach (BattleUnit victim in enemies.Where(e => Distance(e.Cell, target.Cell) <= 1).ToList())
+                {
                     bomber.DealDamage(victim, damage, ignoreArmor: false);
+                    if (shock) victim.Stun(1);
+                }
             }
             if (bombers.Count > 0) SkillBanner(bombers, "ДИНАМИТ!", new Color(1f, 0.6f, 0.2f));
         }
@@ -605,7 +1255,7 @@ namespace Casiwar
         {
             List<BattleUnit> monks = Ready(team, UnitClass.Monk);
             if (monks.Count == 0) return;
-            int until = CurrentStep + fireBladesSteps - 1;
+            int until = CurrentStep + fireBladesSeconds;
             foreach (BattleUnit ally in Alive(team).Where(u => u.AttackRange <= 1 && !u.IsHealer))
             {
                 ally.ApplyFireBlades(until, fireBladesBonus * power);
@@ -625,13 +1275,16 @@ namespace Casiwar
                 var hit = new HashSet<BattleUnit>();
                 Vector2 from = mage.Position;
                 float damage = mage.AttackDamage * lightningMultiplier * power;
-                for (int jump = 0; jump <= lightningJumps && target != null; jump++)
+                int jumps = lightningJumps + (team == Team.Player && city != null ? Mathf.RoundToInt(city.ClassEffect(CityEffect.ExtraJumps, UnitClass.Mage)) : 0);
+                float stunChance = team == Team.Player && city != null ? city.ClassEffect(CityEffect.ChainStun, UnitClass.Mage) : 0f;
+                for (int jump = 0; jump <= jumps && target != null; jump++)
                 {
                     BattleVfx.Bolt(from, target.Position, new Color(0.6f, 0.85f, 1f, 0.95f), 0.08f, 0.3f);
                     hit.Add(target);
                     from = target.Position;
                     Vector2Int cell = target.Cell;
                     mage.DealDamage(target, damage, ignoreArmor: true);
+                    if (stunChance > 0f && !target.IsDead && Random.value < stunChance) target.Stun(1);
                     damage *= lightningFalloff;
                     target = Alive(Opposite(team)).Where(e => !hit.Contains(e) && Distance(e.Cell, cell) <= 2)
                         .OrderBy(e => Distance(e.Cell, cell)).FirstOrDefault();
@@ -650,6 +1303,8 @@ namespace Casiwar
                 if (target == null) continue;
                 BattleVfx.Bolt(archer.Position, target.Position, new Color(1f, 0.92f, 0.6f, 0.95f), 0.1f, 0.35f);
                 archer.Attack(target, volleyMultiplier * power);
+                float burn = team == Team.Player && city != null ? city.ClassEffect(CityEffect.FireArrows, UnitClass.Archer) : 0f;
+                if (burn > 0f && !target.IsDead) target.Ignite(archer, archer.AttackDamage * burn, 3f);
             }
             if (archers.Count > 0) SkillBanner(archers, "ЗАЛП!", new Color(1f, 0.92f, 0.6f));
         }
@@ -665,7 +1320,7 @@ namespace Casiwar
             foreach (BattleUnit ally in Alive(team))
             {
                 ally.Heal(heal);
-                ally.ApplyBlessing(CurrentStep + blessingSteps - 1, reduction);
+                ally.ApplyBlessing(CurrentStep + blessingSeconds, reduction);
                 BattleVfx.Ring(ally.Position, 0.4f, new Color(1f, 0.92f, 0.55f, 0.6f), 0.45f);
             }
             SkillBanner(monks, "МОЛИТВА!", new Color(1f, 0.92f, 0.55f));
@@ -689,8 +1344,9 @@ namespace Casiwar
                 BattleUnit enemy = FindNearestEnemy(warrior);
                 return enemy != null ? Distance(enemy.Cell, warrior.Cell) : int.MaxValue;
             }
+            int range = chargeRange + (team == Team.Player && city != null ? Mathf.RoundToInt(city.ClassEffect(CityEffect.ChargeRange, UnitClass.Warrior)) : 0);
             foreach (BattleUnit warrior in warriors.OrderBy(DistanceToEnemy).ToList())
-                warrior.Charge(power, chargeRange, chargeBonusPerCell, stun);
+                warrior.Charge(power, range, chargeBonusPerCell, stun);
             SkillBanner(warriors, SkillTitle(team, UnitClass.Warrior).ToUpperInvariant() + "!", new Color(0.55f, 0.85f, 1f));
         }
 
@@ -702,7 +1358,8 @@ namespace Casiwar
         {
             if (army == null) return;
             List<BenchUnit> valid = army.Where(u => u != null && u.data != null).ToList();
-            int perRow = Mathf.Clamp(unitsPerRow, 1, columns);
+            // Гарнизон и отряд вместе — шеренги шире (до всей арены)
+            int perRow = Mathf.Clamp(Mathf.Max(unitsPerRow, Mathf.CeilToInt(valid.Count / 3f)), 1, columns);
 
             for (int i = 0; i < valid.Count; i++)
             {
@@ -726,16 +1383,43 @@ namespace Casiwar
                 bool crossbows = player && city != null && city.HasCrossbows;
                 float shieldBonus = player && city != null ? city.ShieldBlockBonus : 0f;
                 unit.Setup(this, valid[i], team, multiplier, healMultiplier, ShieldLevelOf(team), shieldBonus, crossbows, cell, Forward(team));
+                if (player && city != null) unit.AddRange(Mathf.RoundToInt(city.ClassEffect(CityEffect.RangeBonus, valid[i].data.unitClass)));
                 occupancy[x, y] = unit;
                 units.Add(unit);
             }
         }
 
         /// <summary>
-        /// Волна варваров дня: с каждым днём их больше, уровень выше, позже — ★★ и ★★★;
-        /// с enemyHybridDay среди них подрывники и маги, с enemyHeroDay волну ведёт вождь-богатырь.
+        /// Вожак стороны: всем, кого он ведёт (кроме него самого), +доля ХП и атаки; над ним — надпись «ВОЖАК».
         /// </summary>
-        private List<BenchUnit> GenerateEnemies(int day)
+        private void ApplyLeader(Team team, BenchUnit leader, IEnumerable<BenchUnit> led)
+        {
+            if (leader == null || led == null) return;
+            BattleUnit chief = units.FirstOrDefault(u => u.Team == team && u.Source == leader);
+            if (chief == null) return;
+            if (!leaders.TryGetValue(team, out List<BattleUnit> chiefs)) leaders[team] = chiefs = new List<BattleUnit>();
+            chiefs.Add(chief);
+            var followers = new HashSet<BenchUnit>(led);
+            float boost = team == Team.Player && city != null ? 1f + city.ClassEffect(CityEffect.LeaderBoost, leader.data.unitClass) : 1f;
+            float hp = leader.LeadHp * boost, attack = leader.LeadAttack * boost;
+            foreach (BattleUnit unit in units.Where(u => u.Team == team && u != chief && u.Source != null && followers.Contains(u.Source)))
+                unit.ApplyLeadership(hp, attack);
+            BattleVfx.FloatingText(chief.Position + Vector2.up * 0.75f, "ВОЖАК", team == Team.Player ? new Color(1f, 0.85f, 0.35f) : new Color(1f, 0.55f, 0.5f), 2.6f, 2.2f);
+        }
+
+        /// <summary>Вожаки стороны в этом бою (пусто — нет).</summary>
+        public IReadOnlyList<BattleUnit> LeadersOf(Team team) =>
+            leaders.TryGetValue(team, out List<BattleUnit> chiefs) ? chiefs : (IReadOnlyList<BattleUnit>)Array.Empty<BattleUnit>();
+
+        /// <summary>Первый вожак стороны (null — нет).</summary>
+        public BattleUnit LeaderOf(Team team) => LeadersOf(team).FirstOrDefault();
+
+        /// <summary>
+        /// Отряд врагов на ход day: с каждым ходом их больше, уровень выше, позже — ★★ и ★★★;
+        /// с enemyHybridDay среди них подрывники и маги, с enemyHeroDay отряд ведёт вождь-богатырь.
+        /// levelBonus — сильнее обычного (армии городов), sizeMultiplier — больше обычного.
+        /// </summary>
+        public List<BenchUnit> GenerateEnemies(int day, int levelBonus = 0, float sizeMultiplier = 1f)
         {
             var enemies = new List<BenchUnit>();
             List<UnitData> pool = enemyPool.FindAll(unit => unit != null);
@@ -745,8 +1429,9 @@ namespace Casiwar
                 return enemies;
             }
 
-            int count = Mathf.Clamp(baseEnemyCount + Mathf.FloorToInt((day - 1) * enemiesPerDay), 1, Mathf.Min(maxEnemies, unitsPerRow * 3));
-            int baseLevel = Mathf.Clamp(1 + (day - 1) / enemyLevelEveryDays, 1, UnitData.MaxLevel);
+            int count = Mathf.Clamp(Mathf.RoundToInt((baseEnemyCount + Mathf.FloorToInt((day - 1) * enemiesPerDay)) * Mathf.Max(0.1f, sizeMultiplier)),
+                1, Mathf.Min(maxEnemies, unitsPerRow * 3));
+            int baseLevel = Mathf.Clamp(1 + (day - 1) / enemyLevelEveryDays + levelBonus, 1, UnitData.MaxLevel);
             float twoStarChance = day >= enemyTwoStarDay ? Mathf.Min(enemyMaxTwoStarChance, enemyTwoStarChancePerDay * (day - enemyTwoStarDay + 1)) : 0f;
             float threeStarChance = day >= enemyThreeStarDay ? Mathf.Min(enemyMaxThreeStarChance, enemyThreeStarChancePerDay * (day - enemyThreeStarDay + 1)) : 0f;
             float hybridShare = day >= enemyHybridDay ? Mathf.Min(enemyMaxHybridShare, enemyHybridShare + enemyHybridSharePerDay * (day - enemyHybridDay)) : 0f;
@@ -847,6 +1532,16 @@ namespace Casiwar
 
         private void Update()
         {
+            if (IsRunning && fighting) TickBattle(Time.deltaTime * battleSpeed);
+            if (IsRunning)
+            {
+                stepTextTimer -= Time.deltaTime;
+                if (stepTextTimer <= 0f)
+                {
+                    stepTextTimer = 0.25f;
+                    UpdateStepText();
+                }
+            }
             if (rosterLabels == null || rosterLabels.Length == 0) return;
             rosterTimer -= Time.deltaTime;
             if (rosterTimer > 0f) return;
@@ -854,58 +1549,70 @@ namespace Casiwar
             UpdateRoster();
         }
 
-        /// <summary>Легенда слота: обычные символы, навыки классов из этой армии и открытые особые символы — с цифрами.</summary>
+        /// <summary>
+        /// Легенда поля боя значками: что даёт ряд ⚔ и ➜, навыки классов этой армии и их суперудары (5 в ряд),
+        /// открытые особые символы, каскад.
+        /// </summary>
         private void UpdateLegend()
         {
             if (legendText == null) return;
-            const string head = "<color=#ffd166>";
+            const string gold = "<color=#ffd166>";
             const string end = "</color>";
-            int need = slotMachine != null ? slotMachine.minSkillCluster : 3;
-            int burst = slotMachine != null ? slotMachine.burstMinSize : 5;
+            const string muted = "<color=#8a8f9c>";
             var lines = new List<string>
             {
-                $"{head}{GameVisuals.IconAttack}{end} — столько юнитов ударят",
-                $"{head}{GameVisuals.IconMove}{end} — столько юнитов шагнут",
+                $"{gold}3 одинаковых в ряд{end} <size=80%>(4 — ×1.5, 5 — ×2)</size>",
+                $"<size=85%>{muted}круглые — действия, квадратные — бойцы; выберите фишку — запульсируют те, с кем она сложится{end}</size>",
+                $"{GameVisuals.IconAttack} натиск: кто достаёт — бьют",
+                $"{GameVisuals.IconMove} марш к врагу",
                 string.Empty,
-                $"<b>Навык</b> — кластер из {need}+ одинаковых букв, и не меньше, чем юнитов этого класса:",
             };
-            foreach (UnitClass unitClass in AliveClasses(Team.Player).OrderBy(c => (int)c))
+            List<UnitClass> classes = boardClasses.Where(c => SkillEffect(c).Length > 0).OrderBy(c => (int)c).ToList();
+            foreach (UnitClass unitClass in classes)
             {
-                string effect = SkillEffect(unitClass);
-                if (effect.Length > 0) lines.Add($"{head}{GameVisuals.ClassLetter(unitClass)}{end} {SkillTitle(Team.Player, unitClass)}: {effect}");
+                lines.Add($"{GameVisuals.ClassIcon(unitClass)} {gold}{SkillTitle(Team.Player, unitClass)}{end} {SkillEffect(unitClass)}");
+                if (Array.IndexOf(AbilityClasses, unitClass) < 0) continue;
+                int superLength = SuperLength(unitClass);
+                lines.Add(SuperUnlocked(Team.Player, unitClass)
+                    ? $"<size=85%>  {superLength} в ряд: {gold}{SuperName(unitClass)}{end} {SuperEffect(unitClass)}</size>"
+                    : $"<size=85%>{muted}  {superLength} в ряд: суперудар — приказ в гильдии{end}</size>");
             }
-            if (CountAlive(Team.Player, UnitClass.Hero) > 0) lines.Add($"{head}Б{end}огатырь бьёт вместе с любым навыком");
+            List<UnitClass> offBoard = OffBoardClasses();
+            if (offBoard.Count > 0)
+                lines.Add($"<size=85%>{string.Concat(offBoard.Select(GameVisuals.ClassIcon))} не на поле — навык сами раз в {offBoardSkillInterval:0} с</size>");
+            if (CountAlive(Team.Player, UnitClass.Hero) > 0) lines.Add($"{GameVisuals.ClassIcon(UnitClass.Hero)} бьёт с любым навыком");
+            foreach (BattleUnit chief in LeadersOf(Team.Player))
+            {
+                if (chief.Source != null) lines.Add($"{gold}Вожак {chief.Source.Name}{end}: своей линейке {chief.Source.LeadText}");
+            }
 
-            bool banners = city != null && city.BannerLevel > 0;
-            bool multipliers = city != null && city.MultiplierLevel > 0;
-            bool candles = city != null && city.RelicLevel > 0;
             lines.Add(string.Empty);
-            if (banners) lines.Add($"{GameVisuals.IconBanner} Знамя — джокер: считается буквой любого кластера рядом");
-            if (multipliers) lines.Add($"{head}×{city.MultiplierValue}{end} — кластер, который его касается, действует в {city.MultiplierValue} раза сильнее");
-            if (candles)
+            List<BattleSymbol> symbols = board != null ? board.Symbols.ToList() : new List<BattleSymbol>();
+            if (symbols.Contains(BattleSymbol.Banner)) lines.Add($"{GameVisuals.IconBanner} джокер — в любой ряд");
+            if (symbols.Contains(BattleSymbol.Multiplier) && city != null) lines.Add($"{gold}×{city.MultiplierValue}{end} джокер, ряд ×{city.MultiplierValue}");
+            if (symbols.Contains(BattleSymbol.Relic) && city != null)
             {
                 int heal = Mathf.RoundToInt(miracleHealShare * 100f * city.MiracleMultiplier);
-                lines.Add($"{GameVisuals.IconCandle} 3+ Свечи где угодно — «Чудо»: все свои +{heal}% ХП и −{Mathf.RoundToInt(blessingReduction * 100f)}% урона " +
-                          $"на {blessingSteps} шага");
+                lines.Add($"{GameVisuals.IconCandle}×3 = {gold}Чудо{end} +{heal}%{GameVisuals.IconHp}");
             }
-            if (!banners || !multipliers || !candles) lines.Add("Знамёна, ×2 и Свечи покупаются во «Войсках»");
-            lines.Add($"Каскад: сработавший кластер от {burst} лопается, следующая волна ×2, потом ×3");
+            lines.Add($"каскад — каждая волна +{Mathf.RoundToInt(cascadeBonus * 100f)}%");
+            lines.Add($"<size=85%><color=#ff8a80>Враг бьёт навыками сам</color></size>");
             legendText.text = string.Join("\n", lines);
         }
 
-        /// <summary>Что делает навык класса — коротко и с цифрами.</summary>
+        /// <summary>Что делает навык класса — коротко, значками и цифрами.</summary>
         private string SkillEffect(UnitClass unitClass)
         {
             switch (unitClass)
             {
                 case UnitClass.Warrior:
-                    return $"бросок до {chargeRange} клеток, удар +{Mathf.RoundToInt(chargeBonusPerCell * 100f)}% за клетку" +
-                           (ShieldLevelOf(Team.Player) > 0 ? ", цель оглушена" : string.Empty);
-                case UnitClass.Archer: return $"все лучники стреляют, урон ×{volleyMultiplier:0.#}";
-                case UnitClass.Priest: return $"лечит всех своих и −{Mathf.RoundToInt(blessingReduction * 100f)}% урона на {blessingSteps} шага";
-                case UnitClass.Bomber: return "динамит в самую плотную кучу врагов";
-                case UnitClass.Monk: return $"удары вблизи у всех своих +{Mathf.RoundToInt(fireBladesBonus * 100f)}% на {fireBladesSteps} шага";
-                case UnitClass.Mage: return $"молния бьёт цель и ещё {lightningJumps} врагов сквозь щиты и броню";
+                    return $"{GameVisuals.IconMove}{chargeRange} +{Mathf.RoundToInt(chargeBonusPerCell * 100f)}%/кл." +
+                           (ShieldLevelOf(Team.Player) > 0 ? ", оглушает" : string.Empty);
+                case UnitClass.Archer: return $"все {GameVisuals.IconAttack}×{volleyMultiplier:0.#}";
+                case UnitClass.Priest: return $"+{GameVisuals.IconHp} всем, −{Mathf.RoundToInt(blessingReduction * 100f)}% урона {blessingSeconds}с";
+                case UnitClass.Bomber: return "по толпе";
+                case UnitClass.Monk: return $"{GameVisuals.IconAttack}+{Mathf.RoundToInt(fireBladesBonus * 100f)}% вблизи {fireBladesSeconds}с";
+                case UnitClass.Mage: return $"{lightningJumps + 1} цели сквозь броню";
                 default: return string.Empty;
             }
         }
@@ -914,11 +1621,12 @@ namespace Casiwar
         private void UpdateRoster()
         {
             int index = 0;
+            IReadOnlyList<BattleUnit> chiefs = LeadersOf(Team.Player);
             foreach (BattleUnit unit in units)
             {
                 if (unit == null || unit.Team != Team.Player) continue;
                 if (index >= rosterLabels.Length) break;
-                if (rosterLabels[index] != null) rosterLabels[index].text = RosterEntry(unit);
+                if (rosterLabels[index] != null) rosterLabels[index].text = RosterEntry(unit, chiefs.Contains(unit));
                 index++;
             }
             for (; index < rosterLabels.Length; index++)
@@ -927,16 +1635,44 @@ namespace Casiwar
             }
         }
 
-        private static string RosterEntry(BattleUnit unit)
+        /// <summary>
+        /// Строк в панели бойцов меньше, чем наших на арене (гарнизон + отряд) — в каждой колонке-шеренге
+        /// добавляются строки (копии последней), колонки заполняются по очереди.
+        /// </summary>
+        private void EnsureRosterCapacity(int count)
+        {
+            if (rosterLabels == null || rosterLabels.Length == 0 || rosterLabels.Length >= count) return;
+            List<Transform> ranks = rosterLabels.Where(l => l != null).Select(l => l.transform.parent).Distinct().ToList();
+            if (ranks.Count == 0) return;
+            int perRank = Mathf.CeilToInt(count / (float)ranks.Count);
+            var all = new List<TMP_Text>();
+            foreach (Transform rank in ranks)
+            {
+                List<TMP_Text> labels = rosterLabels.Where(l => l != null && l.transform.parent == rank).ToList();
+                while (labels.Count < perRank)
+                {
+                    TMP_Text copy = Instantiate(labels[labels.Count - 1], rank);
+                    copy.text = string.Empty;
+                    labels.Add(copy);
+                }
+                all.AddRange(labels);
+            }
+            rosterLabels = all.ToArray();
+        }
+
+        /// <summary>Строка юнита; вожак — золотым именем.</summary>
+        private static string RosterEntry(BattleUnit unit, bool leader)
         {
             string stars = unit.Stars > 1 ? " " + GameVisuals.Stars(unit.Stars) : string.Empty;
-            string name = $"{(unit.Source != null ? unit.Source.Name : unit.Data.unitName)}{stars} <size=75%>ур.{unit.Level}</size>";
-            if (unit.IsDead) return $"<color=#7a7f8c>{name} — пал</color>";
+            string title = unit.Source != null ? unit.Source.Name : unit.Data.unitName;
+            if (leader && !unit.IsDead) title = $"<color=#ffd166>{title}</color>";
+            string name = $"{GameVisuals.ClassIcon(unit.Data.unitClass)} {title}{stars} <size=75%>ур.{unit.Level}</size>";
+            if (unit.IsDead) return $"<color=#7a7f8c>{name} {GameVisuals.IconDead}</color>";
             float share = unit.MaxHp > 0f ? unit.Hp / unit.MaxHp : 0f;
             string hpColor = ColorUtility.ToHtmlStringRGB(Color.Lerp(new Color(0.95f, 0.35f, 0.3f), new Color(0.45f, 0.95f, 0.5f), share));
             string state = unit.IsStunned ? " <color=#ffe066>оглушён</color>" : string.Empty;
             return $"{name}  {GameVisuals.IconAttack}<color=#ffd166>{Mathf.RoundToInt(unit.AttackDamage)}</color>  " +
-                   $"<color=#{hpColor}>ХП {Mathf.CeilToInt(unit.Hp)}/{Mathf.RoundToInt(unit.MaxHp)}</color>{state}";
+                   $"{GameVisuals.IconHp}<color=#{hpColor}>{Mathf.CeilToInt(unit.Hp)}/{Mathf.RoundToInt(unit.MaxHp)}</color>{state}";
         }
 
         private void ClearUnits()
@@ -974,6 +1710,42 @@ namespace Casiwar
         {
             if (occupancy != null && InBounds(unit.Cell) && occupancy[unit.Cell.x, unit.Cell.y] == unit)
                 occupancy[unit.Cell.x, unit.Cell.y] = null;
+            if (unit.Team != Team.Player || !IsRunning || !fighting || city == null) return;
+            // «Святые мощи»: погиб наш боец — на поле боя падает Свеча
+            int candles = Mathf.RoundToInt(city.Effect(CityEffect.Martyrs));
+            if (candles > 0 && board != null) board.Inject(BattleSymbol.Relic, candles);
+            // «Пороховые бочки»: погибая, подрывник взрывается
+            float blast = city.ClassEffect(CityEffect.DeathBlast, unit.Data.unitClass);
+            if (blast > 0f)
+            {
+                BattleVfx.Ring(unit.Position, cellSize * 2.6f, new Color(1f, 0.55f, 0.15f, 0.85f), 0.5f);
+                BattleVfx.FloatingText(unit.Position + Vector2.up * 0.5f, "ВЗРЫВ!", new Color(1f, 0.6f, 0.2f), 3.2f);
+                foreach (BattleUnit enemy in units.Where(u => !u.IsDead && u.Team != unit.Team && Distance(u.Cell, unit.Cell) <= 1).ToList())
+                    unit.DealDamage(enemy, unit.AttackDamage * blast, ignoreArmor: false);
+            }
+            // «Обители»: павший рядом с жрецом раз за бой встаёт
+            if (!unit.SecondWindUsed)
+            {
+                BattleUnit priest = units.FirstOrDefault(u => !u.IsDead && !u.IsStunned && u.Team == unit.Team && Distance(u.Cell, unit.Cell) <= 2
+                                                            && city.ClassEffect(CityEffect.SecondWind, u.Data.unitClass) > 0f);
+                if (priest != null)
+                {
+                    unit.SecondWindUsed = true;
+                    StartCoroutine(SecondWindRoutine(unit, priest, city.ClassEffect(CityEffect.SecondWind, priest.Data.unitClass)));
+                }
+            }
+        }
+
+        /// <summary>«Обители»: павший встаёт рядом через полсекунды (если бой идёт и есть место).</summary>
+        private IEnumerator SecondWindRoutine(BattleUnit unit, BattleUnit priest, float share)
+        {
+            yield return Wait(0.6f);
+            if (!IsRunning || !unit.IsDead) yield break;
+            Vector2Int? cell = IsFree(unit.Cell) ? unit.Cell : FreeCellNear(unit.Cell, unit.Team);
+            if (!cell.HasValue) yield break;
+            occupancy[cell.Value.x, cell.Value.y] = unit;
+            unit.Revive(cell.Value, share);
+            if (priest != null && !priest.IsDead) BattleVfx.Bolt(priest.Position, unit.Position, new Color(1f, 0.95f, 0.7f, 0.8f), 0.07f, 0.35f);
         }
 
         /// <summary>Кратчайший путь по свободным клеткам (8 направлений) до любой клетки, где isGoal. null — пути нет.</summary>
@@ -1211,12 +1983,19 @@ namespace Casiwar
 
         private void UpdateStepText()
         {
-            if (stepText != null) stepText.text = CurrentStep > 0 ? $"Шаг {CurrentStep}/{maxSteps}" : "Армии строятся...";
+            if (stepText == null) return;
+            if (!fighting)
+            {
+                stepText.text = IsRunning ? "Армии строятся..." : string.Empty;
+                return;
+            }
+            float left = Mathf.Max(0f, battleDuration - battleTime);
+            stepText.text = $"{GameVisuals.IconTurns}{Mathf.FloorToInt(left / 60f)}:{Mathf.FloorToInt(left % 60f):00}\n<color=#8fc1ff>Собирайте ряды!</color>";
         }
 
         private void UpdateSpeedLabel()
         {
-            if (speedButtonLabel != null) speedButtonLabel.text = $"Скорость ×{Mathf.RoundToInt(battleSpeed)}";
+            if (speedButtonLabel != null) speedButtonLabel.text = $"{GameVisuals.IconSpeed}×{Mathf.RoundToInt(battleSpeed)}";
         }
 
         private void OnDrawGizmos()

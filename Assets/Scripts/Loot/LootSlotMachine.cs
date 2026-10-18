@@ -57,14 +57,16 @@ namespace Casiwar
 
     /// <summary>
     /// «Трофеи» после победы — слот 5 барабанов × 3 ряда с линиями выплат.
-    /// • Круток столько, сколько звёзд у выживших в бою юнитов (★ — 1, ★★ — 2, ★★★ — 3).
+    /// • Круток столько, сколько звёзд у убитых в бою врагов (★ — 1, ★★ — 2, ★★★ — 3).
     /// • Символы одни на всех: монеты, оружие (меч) и броня (щит).
     /// • Выигрыш — 3+ одинаковых символа подряд по линии, считая с левого барабана: 3 → уровень I, 4 → II, 5 → III.
     /// • Чей трофей — решает фигура линии: прямые — воинам, углы — лучникам, зигзаги — жрецам
     ///   (легенда линий — над барабанами). Предмет сам надевается на подходящего юнита, иначе — на склад;
     ///   монеты по любой линии → золото (каждая — как монета на поле города).
+    /// • Как сбор ресурсов: барабаны крутятся сами, клик по экрану трофеев (или Enter / «Дальше») — сразу итог,
+    ///   а после последней крутки экран сам закрывается (Finished с итогом для сообщения).
     /// </summary>
-    public class LootSlotMachine : MonoBehaviour
+    public class LootSlotMachine : MonoBehaviour, ITileInputHandler
     {
         public const int Reels = 5;
         public const int Rows = 3;
@@ -147,6 +149,8 @@ namespace Casiwar
         [Min(0f)] public float reelDelay = 0.9f;
         [Tooltip("Пауза после крутки (подсветка линий)")]
         [Min(0f)] public float showDuration = 0.8f;
+        [Tooltip("Пауза после последней крутки — увидеть выигрыш; потом трофеи закрываются сами")]
+        [Min(0f)] public float endPause = 1.2f;
         [Tooltip("Толщина нарисованной линии выигрыша")]
         [Min(1f)] public float lineThickness = 12f;
 
@@ -155,16 +159,26 @@ namespace Casiwar
         private float step;
         private Vector2 lastContainerSize;
         private bool autoSpin;
+        private float autoSpinAt;
+        [Tooltip("Пауза перед первой автокруткой — чтобы экран трофеев успел открыться")]
+        [Min(0f)] public float autoStartDelay = 0.6f;
         private readonly List<string> log = new List<string>();
+        /// <summary>Награда текущей крутки уже выдана (барабаны легли) — при пропуске её не выдавать второй раз.</summary>
+        private bool spinAwarded = true;
+        private int goldWon;
+        private readonly List<string> itemsWon = new List<string>();
+        private bool clickCatcher;
 
         public int SpinsLeft { get; private set; }
         public bool IsSpinning { get; private set; }
+        /// <summary>Трофеи ещё идут: крутки или пауза после последней (клик — сразу итог).</summary>
+        public bool IsActive { get; private set; }
         public bool AutoSpin => autoSpin;
         public LootSymbol[,] LastGrid { get; private set; }
         public List<LootLine> LastLines { get; private set; } = new List<LootLine>();
 
-        /// <summary>Крутки кончились.</summary>
-        public event Action Finished;
+        /// <summary>Трофеи кончились (докрутились или пропущены): итог «+7 🪙, ⚔ Меч II».</summary>
+        public event Action<string> Finished;
 
         private void Awake()
         {
@@ -181,22 +195,28 @@ namespace Casiwar
                 LayoutViews();
                 ClearPaylines();
             }
-            if (autoSpin && !IsSpinning && SpinsLeft > 0) Spin();
+            if (autoSpin && !IsSpinning && SpinsLeft > 0 && Time.time >= autoSpinAt) Spin();
         }
 
         // =====================================================================
         //  Управление
         // =====================================================================
 
-        /// <summary>Начать трофеи: spins круток (по звёздам выживших юнитов).</summary>
+        /// <summary>Начать трофеи: spins круток (по звёздам убитых врагов). Барабаны крутятся сами (пауза — кнопкой).</summary>
         public void BeginLoot(int spins)
         {
             StopAllCoroutines();
             IsSpinning = false;
-            autoSpin = false;
+            IsActive = true;
+            spinAwarded = true;
+            goldWon = 0;
+            itemsWon.Clear();
             SpinsLeft = Mathf.Max(0, spins);
+            autoSpin = SpinsLeft > 0;
+            autoSpinAt = Time.time + autoStartDelay;
             log.Clear();
             BuildViews();
+            EnsureClickCatcher();
             ClearPaylines();
             ShowIdle();
             RefreshLog();
@@ -207,8 +227,66 @@ namespace Casiwar
         {
             StopAllCoroutines();
             IsSpinning = false;
+            IsActive = false;
             autoSpin = false;
             UpdateUi();
+        }
+
+        /// <summary>
+        /// Сразу итог (клик по экрану трофеев, Enter, «Дальше»): оставшиеся крутки считаются без показа, награды выдаются,
+        /// трофеи закрываются.
+        /// </summary>
+        public void Skip()
+        {
+            if (!IsActive) return;
+            StopAllCoroutines();
+            if (!spinAwarded && LastGrid != null) Resolve(LastGrid); // барабаны ещё крутились — их выигрыш
+            for (; SpinsLeft > 0; SpinsLeft--) Resolve(Roll(goldWeight, weaponWeight, armorWeight));
+            Complete();
+        }
+
+        public void OnTileClicked(Vector2Int cell) => Skip();
+        public void OnTileSwiped(Vector2Int cell, Vector2Int direction) { }
+
+        /// <summary>Трофеи кончились: итог — тому, кто ждёт (GameManager закрывает экран).</summary>
+        private void Complete()
+        {
+            IsSpinning = false;
+            IsActive = false;
+            autoSpin = false;
+            spinAwarded = true;
+            UpdateUi();
+            Finished?.Invoke(Summary);
+        }
+
+        /// <summary>«+7 🪙, ⚔ Меч II, 🛡 Щит I».</summary>
+        public string Summary
+        {
+            get
+            {
+                var parts = new List<string>();
+                if (goldWon > 0) parts.Add($"+{goldWon} {GameVisuals.IconGold}");
+                parts.AddRange(itemsWon);
+                return parts.Count > 0 ? string.Join(", ", parts) : "ничего не выпало";
+            }
+        }
+
+        /// <summary>Клик по любому месту экрана трофеев (кроме кнопок) — сразу итог.</summary>
+        private void EnsureClickCatcher()
+        {
+            if (clickCatcher || game == null || game.lootScreen == null) return;
+            clickCatcher = true;
+            var image = game.lootScreen.GetComponent<Image>();
+            if (image == null)
+            {
+                image = game.lootScreen.AddComponent<Image>();
+                image.color = Color.clear;
+            }
+            image.raycastTarget = true;
+            var button = game.lootScreen.GetComponent<Button>();
+            if (button == null) button = game.lootScreen.AddComponent<Button>();
+            button.transition = Selectable.Transition.None;
+            button.onClick.AddListener(Skip);
         }
 
         /// <summary>Кнопка «Крутить».</summary>
@@ -238,6 +316,7 @@ namespace Casiwar
 
             LootSymbol[,] grid = Roll(goldWeight, weaponWeight, armorWeight);
             LastGrid = grid;
+            spinAwarded = false;
 
             // Барабаны: символы падают сверху, левые останавливаются раньше правых
             for (int x = 0; x < Reels; x++)
@@ -257,18 +336,18 @@ namespace Casiwar
                 yield return null;
             }
 
-            // Линии: оружие и броня окрашиваются в цвет класса, которому трофей (монеты ничьи — остаются золотыми),
-            // сама линия рисуется поверх
-            List<LootLine> lines = FindLines(grid);
-            LastLines = lines;
+            // Линии: меч и щит превращаются в оружие и броню класса, которому трофей, того уровня, что выпал
+            // (монеты ничьи — остаются золотыми); сама линия рисуется поверх
+            List<LootLine> lines = Resolve(grid);
             var winning = new HashSet<Vector2Int>();
-            var owners = new Dictionary<Vector2Int, UnitClass>();
+            var owners = new Dictionary<Vector2Int, LootLine>(); // клетка в двух линиях — показываем лучший трофей
             foreach (LootLine line in lines)
             {
                 foreach (Vector2Int cell in line.Cells)
                 {
                     winning.Add(cell);
-                    if (line.Symbol != LootSymbol.Gold) owners[cell] = line.Class;
+                    if (line.Symbol != LootSymbol.Gold && (!owners.TryGetValue(cell, out LootLine other) || line.Tier > other.Tier))
+                        owners[cell] = line;
                 }
             }
             for (int x = 0; x < Reels; x++)
@@ -277,19 +356,13 @@ namespace Casiwar
                 {
                     var cell = new Vector2Int(x, y);
                     bool on = winning.Contains(cell);
-                    if (owners.TryGetValue(cell, out UnitClass owner))
-                    {
-                        SymbolLook look = LookFor(grid[x, y]);
-                        look.color = Color.Lerp(look.color, GameVisuals.ClassColor(owner), 0.75f);
-                        views[x, y].Show(look);
-                    }
+                    if (owners.TryGetValue(cell, out LootLine owner))
+                        views[x, y].Show(LookForPrize(grid[x, y], owner.Class, owner.Tier));
                     views[x, y].SetHint(on);
                     views[x, y].SetDimmed(lines.Count > 0 && !on);
                 }
             }
             foreach (LootLine line in lines) DrawPayline(line);
-            if (lines.Count == 0) AddLog("Пусто");
-            foreach (LootLine line in lines) Award(line);
 
             float shown = 0f;
             while (shown < showDuration)
@@ -298,27 +371,46 @@ namespace Casiwar
                 yield return null;
             }
             IsSpinning = false;
-            if (SpinsLeft <= 0)
-            {
-                autoSpin = false;
-                Finished?.Invoke();
-            }
             UpdateUi();
+            if (SpinsLeft > 0) yield break;
+
+            // Последняя крутка: выигрыш ещё виден, потом трофеи закрываются сами
+            autoSpin = false;
+            float wait = 0f;
+            while (wait < endPause)
+            {
+                wait += Time.deltaTime;
+                yield return null;
+            }
+            Complete();
+        }
+
+        /// <summary>Выигрыши расклада: выдать награды (монеты — в казну, вещи — бойцам) и записать в журнал.</summary>
+        private List<LootLine> Resolve(LootSymbol[,] grid)
+        {
+            List<LootLine> lines = FindLines(grid);
+            LastLines = lines;
+            spinAwarded = true;
+            if (lines.Count == 0) AddLog("Пусто");
+            foreach (LootLine line in lines) Award(line);
+            return lines;
         }
 
         private void Award(LootLine line)
         {
             if (line.Symbol == LootSymbol.Gold)
             {
-                int gold = line.Length * (city != null ? city.GoldPerCoin : 1);
+                int gold = line.Length + (city != null ? city.GoldPerCluster : 0); // монета = 1, торговые ряды и колосс — к линии
                 if (game != null) game.AddGold(gold);
+                goldWon += gold;
                 AddLog($"+{gold} {GameVisuals.IconGold}");
                 return;
             }
             ItemData item = ItemFor(line.Class, line.Symbol);
             if (item == null) return;
             string result = bench != null ? bench.AddItem(item, line.Tier) : item.Describe(line.Tier);
-            AddLog($"{Recipients(line.Class)} ({ShapeName(line.Class)}): {result}");
+            itemsWon.Add($"{GameVisuals.ClassIcon(line.Class)} {item.itemName} {ItemData.TierName(line.Tier)}");
+            AddLog($"{GameVisuals.ClassIcon(line.Class)} {result}");
         }
 
         /// <summary>Предмет класса для символа (оружие или броня).</summary>
@@ -384,6 +476,17 @@ namespace Casiwar
             }
         }
 
+        /// <summary>Символ в выигравшей линии: настоящий предмет класса нужного уровня на фоне цвета класса.</summary>
+        public static SymbolLook LookForPrize(LootSymbol symbol, UnitClass owner, int tier)
+        {
+            SymbolLook look = LookFor(symbol);
+            ItemSlot slot = symbol == LootSymbol.Armor ? ItemSlot.Armor : ItemSlot.Weapon;
+            Sprite gear = UnitArt.Gear(owner, slot, tier);
+            look.color = gear != null ? GameVisuals.IconBackground(owner) : Color.Lerp(look.color, GameVisuals.ClassColor(owner), 0.75f);
+            if (gear != null) look.icon = gear;
+            return look;
+        }
+
         private void BuildViews()
         {
             if (views != null || gridContainer == null || cellPrefab == null) return;
@@ -393,7 +496,7 @@ namespace Casiwar
                 for (int x = 0; x < Reels; x++)
                 {
                     TileView view = Instantiate(cellPrefab, gridContainer);
-                    view.Init(null, new Vector2Int(x, y));
+                    view.Init(this, new Vector2Int(x, y)); // клик по барабанам — сразу итог
                     views[x, y] = view;
                 }
             }
@@ -493,13 +596,13 @@ namespace Casiwar
         private void RefreshLog()
         {
             if (logText != null)
-                logText.text = log.Count > 0 ? string.Join("\n", log) : "Жмите «Крутить»: 3+ одинаковых подряд по линии с левого барабана — трофей";
+                logText.text = log.Count > 0 ? string.Join("\n", log) : "3+ подряд по линии слева — трофей · клик — сразу итог";
         }
 
         private void UpdateUi()
         {
-            if (spinsText != null) spinsText.text = SpinsLeft > 0 || IsSpinning ? $"Круток: {SpinsLeft}" : "Крутки кончились";
-            if (autoLabel != null) autoLabel.text = autoSpin ? "Авто: ВКЛ" : "Авто: ВЫКЛ";
+            if (spinsText != null) spinsText.text = SpinsLeft > 0 || IsSpinning ? $"{GameVisuals.IconSpin} {SpinsLeft}" : $"{GameVisuals.IconSpin} 0";
+            if (autoLabel != null) autoLabel.text = autoSpin ? GameVisuals.IconPause : GameVisuals.IconPlay;
         }
     }
 }

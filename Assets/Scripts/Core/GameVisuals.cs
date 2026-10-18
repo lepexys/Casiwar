@@ -34,17 +34,29 @@ namespace Casiwar
         public const string IconKnowledge = "📖";   // 📖 очки знаний
         public const string IconBanner = "\U0001F6A9";   // 🚩 Знамя — джокер боевого слота
         public const string IconCandle = "\U0001F56F";   // 🕯 Свеча — 3+ в слоте: «Чудо»
+        // Свои значки — в области частного использования Юникода (в шрифте их точно нет, рисует только спрайт-ассет)
+        public const string IconMorale = "\uE010";    // огонь — боевой дух
+        public const string IconHp = "\uE011";        // сердце — здоровье
+        public const string IconPause = "\uE012";     // ❚❚ — пауза (слот не крутится сам)
+        public const string IconPlay = "\uE013";      // ► — крутится сам
+        public const string IconSpeed = "\uE014";     // ►► — скорость боя
+        public const string IconTurns = "\uE015";     // песочные часы — ходы, раунды
+        public const string IconDead = "\uE016";      // череп — погиб
+        public const string IconHold = "\uE017";      // замок — удержанный столбец
+        public const string IconSpin = "\uE018";      // круговая стрелка — крутить
+        public const string IconWalls = "\uE019";     // башня — наш город, у стен
 
         public static readonly Color BannerSymbolColor = new Color(0.86f, 0.62f, 0.22f);
         public static readonly Color MultiplierSymbolColor = new Color(0.95f, 0.36f, 0.62f);
-        public static readonly Color CandleSymbolColor = new Color(0.98f, 0.90f, 0.62f);
+        public static readonly Color CandleSymbolColor = new Color(1f, 0.80f, 0.28f);
 
         public static readonly Color PlayerColor = new Color(0.25f, 0.6f, 1f);
         public static readonly Color EnemyColor = new Color(1f, 0.32f, 0.3f);
         public static readonly Color GoldColor = new Color(1f, 0.80f, 0.22f);
-        public static readonly Color AttackSymbolColor = new Color(0.66f, 0.70f, 0.80f);
-        public static readonly Color MoveSymbolColor = new Color(0.22f, 0.62f, 0.78f);
+        public static readonly Color AttackSymbolColor = new Color(0.90f, 0.92f, 0.97f);
+        public static readonly Color MoveSymbolColor = new Color(0.20f, 0.80f, 0.86f);
         public static readonly Color BlankSymbolColor = new Color(0.19f, 0.20f, 0.25f);
+        public static readonly Color CivilianColor = new Color(0.90f, 0.91f, 0.93f);
 
         // ---------- Классы юнитов ----------
 
@@ -62,6 +74,9 @@ namespace Casiwar
                 default: return new Color(0.72f, 0.70f, 0.62f);
             }
         }
+
+        /// <summary>Фон фишки с иконкой класса: цвет класса, притушенный, чтобы иконка (корона на золоте, посох на синем) читалась.</summary>
+        public static Color IconBackground(UnitClass unitClass) => Color.Lerp(ClassColor(unitClass), new Color(0.08f, 0.09f, 0.12f), 0.42f);
 
         public static string ClassName(UnitClass unitClass)
         {
@@ -109,7 +124,26 @@ namespace Casiwar
             }
         }
 
-        /// <summary>Массовый навык класса в боевом слоте.</summary>
+        /// <summary>Значок класса в тексте (меч, лук, книга…): те же картинки, что на фишках поля.</summary>
+        public static string ClassIcon(UnitClass unitClass)
+        {
+            switch (unitClass)
+            {
+                case UnitClass.Warrior: return "\uE001";
+                case UnitClass.Archer: return "\uE002";
+                case UnitClass.Priest: return "\uE003";
+                case UnitClass.Bomber: return "\uE004";
+                case UnitClass.Monk: return "\uE005";
+                case UnitClass.Mage: return "\uE006";
+                case UnitClass.Hero: return "\uE007";
+                default: return "\uE008";
+            }
+        }
+
+        /// <summary>Класс для легенд: значок класса (раньше — название цветом класса).</summary>
+        public static string ClassTag(UnitClass unitClass, bool plural = true) => ClassIcon(unitClass);
+
+        /// <summary>Массовый навык класса (ряд его символов на поле боя).</summary>
         public static string SkillName(UnitClass unitClass)
         {
             switch (unitClass)
@@ -194,10 +228,11 @@ namespace Casiwar
             switch (tile.Kind)
             {
                 case TileKind.Unit:
-                    look.color = ClassColor(tile.Class);
                     look.shape = RoundedRect;
                     look.sliced = true;
-                    look.icon = tile.Unit != null ? tile.Unit.sprite : null;
+                    look.icon = UnitArt.Icon(tile.Class);
+                    if (look.icon == null && tile.Unit != null) look.icon = tile.Unit.sprite;
+                    look.color = look.icon != null ? IconBackground(tile.Class) : ClassColor(tile.Class);
                     look.label = look.icon != null ? string.Empty : ClassLetter(tile.Class);
                     break;
                 case TileKind.Resource:
@@ -205,6 +240,14 @@ namespace Casiwar
                     look.shape = Circle;
                     look.label = ResourceIcon(tile.Resource); // иконка-спрайт TextMeshPro
                     look.labelInset = 0.12f;
+                    break;
+                case TileKind.Civilian:
+                    // Горожане — белые, не складываются, только мешают; их всё меньше, когда строятся гильдии
+                    look.shape = RoundedRect;
+                    look.sliced = true;
+                    look.color = CivilianColor;
+                    look.icon = UnitArt.Civilian();
+                    look.label = look.icon != null ? string.Empty : "Г";
                     break;
                 default:
                     ItemData item = tile.Item;
@@ -219,19 +262,26 @@ namespace Casiwar
             return look;
         }
 
-        /// <summary>Символ боевого слота (multiplierValue — сила множителя: ×2 или ×3).</summary>
+        /// <summary>Символ поля боя (multiplierValue — сила множителя: ×2 или ×3).</summary>
         public static SymbolLook LookForSlot(BattleSymbol symbol, int multiplierValue = 2)
         {
             var look = new SymbolLook { shape = RoundedRect, sliced = true };
             switch (symbol)
             {
+                // Действия — круглые, бойцы — квадратные с портретом: ⚔ не путается с мечом воина
                 case BattleSymbol.Attack:
                     look.color = AttackSymbolColor;
+                    look.shape = Circle;
+                    look.sliced = false;
                     look.label = IconAttack;
+                    look.labelInset = 0.12f;
                     break;
                 case BattleSymbol.Move:
                     look.color = MoveSymbolColor;
+                    look.shape = Circle;
+                    look.sliced = false;
                     look.label = IconMove;
+                    look.labelInset = 0.12f;
                     break;
                 case BattleSymbol.Blank:
                     look.color = BlankSymbolColor;
@@ -251,13 +301,17 @@ namespace Casiwar
                     break;
                 case BattleSymbol.Relic:
                     look.color = CandleSymbolColor;
+                    look.shape = Circle;
+                    look.sliced = false;
                     look.label = IconCandle;
-                    look.labelInset = 0.1f;
+                    look.labelInset = 0.16f;
                     break;
                 default:
-                    UnitClass unitClass = BattleSlotMachine.ClassOf(symbol);
-                    look.color = ClassColor(unitClass);
-                    look.label = ClassLetter(unitClass);
+                    UnitClass unitClass = BattleBoard.ClassOf(symbol);
+                    look.icon = UnitArt.Icon(unitClass);
+                    // Ярче, чем на скамейке: классы на поле различаются цветом с первого взгляда
+                    look.color = look.icon != null ? Color.Lerp(ClassColor(unitClass), new Color(0.08f, 0.09f, 0.12f), 0.2f) : ClassColor(unitClass);
+                    look.label = look.icon != null ? string.Empty : ClassLetter(unitClass);
                     break;
             }
             return look;
@@ -273,6 +327,7 @@ namespace Casiwar
         private static Sprite triangle;
         private static Sprite ring;
         private static Sprite sword;
+        private static Sprite softCircle;
 
         /// <summary>Белый квадрат 1×1 мировую единицу: клетки арены, полоски ХП, молнии.</summary>
         public static Sprite Square => square != null ? square : (square = CreateSprite(4, (x, y) => 1f, 4f, Vector4.zero, "Square"));
@@ -311,6 +366,22 @@ namespace Casiwar
 
         /// <summary>Кольцо (метка цели «Охоты»).</summary>
         public static Sprite Ring => ring != null ? ring : (ring = CreateRing());
+
+        /// <summary>Круг с мягким краем: плотный в середине и тающий к краю (тень под зданием на карте).</summary>
+        public static Sprite SoftCircle => softCircle != null ? softCircle : (softCircle = CreateSoftCircle());
+
+        private static Sprite CreateSoftCircle()
+        {
+            const int size = 64;
+            const float radius = size * 0.5f;
+            return CreateSprite(size, (x, y) =>
+            {
+                float dx = x + 0.5f - radius;
+                float dy = y + 0.5f - radius;
+                float t = Mathf.Clamp01(1f - Mathf.Sqrt(dx * dx + dy * dy) / radius);
+                return Mathf.SmoothStep(0f, 1f, t * 1.5f);
+            }, size, Vector4.zero, "SoftCircle");
+        }
 
         private static Sprite CreateCircle()
         {

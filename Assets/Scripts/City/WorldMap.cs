@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace Casiwar
@@ -11,6 +12,8 @@ namespace Casiwar
         Rocks,  // каменистая клетка
         River,  // река
         Lake,   // озеро / пруд
+        Mountain, // гора — редкая вершина среди камней: только под монастырь (монахи)
+        Spring,   // волшебный источник — редкий, у рек и озёр: только под башню магов (маги)
     }
 
     /// <summary>Видимость клетки (туман войны).</summary>
@@ -25,7 +28,9 @@ namespace Casiwar
     /// Карта мира как в «Цивилизации»: Width×Height клеток с местностью и видимостью.
     /// Генерация простая: пятна леса и камней (шум Перлина), несколько небольших озёр и 1–2 петляющие реки
     /// от края до края карты (клетки реки соединены сторонами, как русло). Город занимает свои клетки
-    /// на этой карте (CityManager). Пока местность ни на что не влияет — только на воде строить нельзя.
+    /// на этой карте (CityManager). Местность решает, что где строить: обычные здания — на траве, в лесу и на камнях,
+    /// плавильня — только на камнях, лесопилка — в лесу; редкие горы (вершины каменных пятен) — под монастырь,
+    /// редкие волшебные источники (у воды) — под башню магов. На воде не строят ничего.
     /// Видимость (туман войны) — задел на потом: сейчас все клетки открыты.
     /// Координаты: x — вправо, y — вниз (строка 0 — верх карты).
     /// </summary>
@@ -61,6 +66,26 @@ namespace Casiwar
             return type == TerrainType.River || type == TerrainType.Lake;
         }
 
+        /// <summary>Обычная суша (трава, лес, камни): тут можно ставить дома и обычные здания.</summary>
+        public bool IsPlainLand(Vector2Int cell)
+        {
+            if (!InBounds(cell)) return false;
+            TerrainType type = TerrainAt(cell);
+            return type == TerrainType.Grass || type == TerrainType.Forest || type == TerrainType.Rocks;
+        }
+
+        /// <summary>Рядом (по сторонам) река или озеро.</summary>
+        public bool TouchesWater(Vector2Int cell)
+        {
+            foreach (Vector2Int step in Sides)
+            {
+                if (InBounds(cell + step) && IsWater(cell + step)) return true;
+            }
+            return false;
+        }
+
+        private static readonly Vector2Int[] Sides = { Vector2Int.up, Vector2Int.down, Vector2Int.left, Vector2Int.right };
+
         public void SetTerrain(Vector2Int cell, TerrainType type)
         {
             if (!InBounds(cell) || terrain[cell.x, cell.y] == type) return;
@@ -76,6 +101,8 @@ namespace Casiwar
                 case TerrainType.Rocks: return "Камни";
                 case TerrainType.River: return "Река";
                 case TerrainType.Lake: return "Озеро";
+                case TerrainType.Mountain: return "Гора";
+                case TerrainType.Spring: return "Волшебный источник";
                 default: return "Трава";
             }
         }
@@ -131,14 +158,29 @@ namespace Casiwar
 
             // 1) Лес и камни — пятнами (шум Перлина), остальное — трава
             float forestX = Offset(), forestY = Offset(), rocksX = Offset(), rocksY = Offset();
+            var rockHeight = new float[map.Width, map.Height];
             for (int x = 0; x < map.Width; x++)
             {
                 for (int y = 0; y < map.Height; y++)
                 {
                     float forest = Mathf.PerlinNoise((x + forestX) * 0.11f, (y + forestY) * 0.11f);
                     float rocks = Mathf.PerlinNoise((x + rocksX) * 0.16f, (y + rocksY) * 0.16f);
+                    rockHeight[x, y] = rocks;
                     map.terrain[x, y] = rocks > 0.7f ? TerrainType.Rocks : forest > 0.58f ? TerrainType.Forest : TerrainType.Grass;
                 }
+            }
+
+            // Горы — редкие одиночные вершины: самые высокие клетки каменных пятен, далеко друг от друга
+            var peaks = new List<Vector2Int>();
+            int mountains = 3 + random.Next(3);
+            foreach (Vector2Int cell in AllCells(map.Width, map.Height)
+                         .Where(c => map.terrain[c.x, c.y] == TerrainType.Rocks)
+                         .OrderByDescending(c => rockHeight[c.x, c.y]))
+            {
+                if (peaks.Count >= mountains) break;
+                if (peaks.Any(peak => Mathf.Max(Mathf.Abs(peak.x - cell.x), Mathf.Abs(peak.y - cell.y)) < MountainSpacing)) continue;
+                peaks.Add(cell);
+                map.terrain[cell.x, cell.y] = TerrainType.Mountain;
             }
 
             // 2) Небольшие озёра — неровные пятна
@@ -168,8 +210,76 @@ namespace Casiwar
                 map.CarveRiver(random, vertical);
                 vertical = !vertical; // вторая река течёт поперёк первой
             }
+
+            // 4) Волшебные источники: редкие клетки суши у рек и озёр
+            int springs = 2 + random.Next(3);
+            for (int attempt = 0; springs > 0 && attempt < 4000; attempt++)
+            {
+                var cell = new Vector2Int(random.Next(map.Width), random.Next(map.Height));
+                if (!map.IsPlainLand(cell) || !map.TouchesWater(cell)) continue;
+                map.terrain[cell.x, cell.y] = TerrainType.Spring;
+                springs--;
+            }
             map.Version++;
             return map;
+        }
+
+        /// <summary>Горы стоят не ближе этого друг к другу (по Чебышёву).</summary>
+        private const int MountainSpacing = 8;
+
+        private static IEnumerable<Vector2Int> AllCells(int width, int height)
+        {
+            for (int x = 0; x < width; x++)
+                for (int y = 0; y < height; y++)
+                    yield return new Vector2Int(x, y);
+        }
+
+        /// <summary>
+        /// Гарантия для города: на расстоянии minRadius…maxRadius от центра (за стартовыми границами, но в пределах
+        /// расширения) есть хотя бы одна клетка feature (гора или волшебный источник). Нет — ставим сами:
+        /// гору — лучше на камни, источник — лучше на берег (если воды рядом нет, рядом появляется пруд).
+        /// </summary>
+        public void EnsureFeatureNear(TerrainType feature, Vector2Int center, int minRadius, int maxRadius)
+        {
+            var random = new System.Random(Seed ^ (int)feature * 7919);
+            var ring = new List<Vector2Int>();
+            for (int r = minRadius; r <= maxRadius; r++)
+            {
+                foreach (Vector2Int cell in Ring(center, r))
+                {
+                    if (!InBounds(cell)) continue;
+                    if (TerrainAt(cell) == feature) return; // уже есть
+                    ring.Add(cell);
+                }
+            }
+
+            bool Preferred(Vector2Int cell) => feature == TerrainType.Mountain
+                ? TerrainAt(cell) == TerrainType.Rocks
+                : IsPlainLand(cell) && TouchesWater(cell);
+            List<Vector2Int> candidates = ring.Where(Preferred).ToList();
+            if (candidates.Count == 0) candidates = ring.Where(IsPlainLand).ToList();
+            if (candidates.Count == 0) return;
+
+            Vector2Int site = candidates[random.Next(candidates.Count)];
+            SetTerrain(site, feature);
+            if (feature == TerrainType.Mountain)
+            {
+                // Гора не торчит посреди луга: вокруг — камни (там же встанет плавильня)
+                foreach (Vector2Int step in Sides)
+                {
+                    Vector2Int cell = site + step;
+                    if (cell != center && IsPlainLand(cell)) SetTerrain(cell, TerrainType.Rocks);
+                }
+                return;
+            }
+            if (TouchesWater(site)) return;
+            // Источник без воды — рядом пруд (подальше от города)
+            Vector2Int pond = Sides.Select(step => site + step)
+                .Where(cell => InBounds(cell) && IsPlainLand(cell))
+                .OrderByDescending(cell => Mathf.Max(Mathf.Abs(cell.x - center.x), Mathf.Abs(cell.y - center.y)))
+                .DefaultIfEmpty(site)
+                .First();
+            if (pond != site) SetTerrain(pond, TerrainType.Lake);
         }
 
         /// <summary>
@@ -223,7 +333,7 @@ namespace Casiwar
             {
                 foreach (Vector2Int cell in Ring(center, r))
                 {
-                    if (!InBounds(cell) || IsWater(cell)) continue;
+                    if (!IsPlainLand(cell)) continue;
                     if (CountLand(cell, 1) < 9 || CountLand(cell, 2) < 20) continue;
                     return cell;
                 }

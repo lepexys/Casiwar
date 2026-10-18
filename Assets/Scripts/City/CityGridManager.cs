@@ -21,7 +21,7 @@ namespace Casiwar
 
     /// <summary>
     /// Кто выходит из линии юнитов (чистая логика — её проверяют тесты):
-    /// • линия 5+ любых юнитов, когда изучены «Былины» и богатыря ещё нет → богатырь (5 — ★, 6 — ★★, 7 — ★★★);
+    /// • линия 5+ любых юнитов, когда изучены «Былины» и богатырей меньше предела → богатырь (5 — ★, 6 — ★★, 7 — ★★★);
     /// • линия с двумя классами → их гибрид (подрывник, монах, маг);
     /// • смешанная линия «для богатыря», когда он уже есть → юнит самого частого класса в линии;
     /// • иначе — самый частый юнит класса линии (одни нейтралы → нейтрал).
@@ -95,21 +95,26 @@ namespace Casiwar
     }
 
     /// <summary>
-    /// ФАЗА 1 — поле города («начальный слот»): 3-в-ряд с ограниченным запасом символов на день.
-    /// Здесь только складываем юнитов и ресурсы — стройка на карте города, наука — в дереве науки.
-    /// Движок поля — в MatchBoard; здесь то, что относится к городу:
-    /// • какие символы падают: ресурсы (золото, производство ⚒, еда) и юниты. Нейтралы — всегда;
-    ///   воины, лучники и жрецы — только если в городе стоит их здание (казармы, стрельбище, святилище);
-    ///   построили такое здание посреди дня — фишки поля сразу перекатываются, чтобы новый класс был на поле;
-    /// • доля ресурсов постоянна, а делится она по фокусу города (например 2:1:1). Фокус выбирают
-    ///   кнопками «Завтра» — он начинает действовать со следующего дня; юниты падают как обычно;
-    /// • что даёт линия: юнит → на скамейку (линия 4 — сразу 2-го уровня, 5+ — 3-го; три одинаковых
-    ///   там сами сливаются в одного ★ выше), ресурсы → в город;
+    /// УСТАРЕЛО как поле: армию теперь вербует слот (RecruitSlot), а этот компонент — его запасник: рамка поля,
+    /// префаб клетки, пул юнитов (RandomUnit, SpecialUnit), подписи под полем и кнопки фокуса сбора ресурсов.
+    /// Прежнее описание поля (3-в-ряд) — ниже; само поле больше не запускается.
+    ///
+    /// Поле армии: 3-в-ряд с ограниченным запасом символов и действий на ход. Ресурсы сюда больше не падают —
+    /// они приходят сами в начале хода (ResourceRain); здесь только люди:
+    /// • горожане (белые) — не складываются ни с кем, только мешают: их можно двигать, чтобы добраться до бойцов;
+    /// • ополченцы (Н) — джокеры: подходят к любой линии юнитов, а линия из одних ополченцев даёт ополченца;
+    /// • бойцы гильдий: каждая построенная гильдия (казармы, стрельбище, святилище) превращает треть горожан в своих
+    ///   бойцов — когда стоят все три, горожан на поле нет. Построили гильдию посреди хода — фишки сразу перекатываются;
+    /// • усилители (плавильня, лесопилка, храм) так же забирают по трети ополченцев — стоят все три, ополченцев нет;
+    /// • что даёт линия: юнит → в гарнизон (линия 4 — сразу 2-го уровня, 5+ — 3-го; три одинаковых
+    ///   там сами сливаются в одного ★ выше);
     /// • гибриды: изучен «Порох» — воин + лучник в одной линии дают подрывника, «Боевые искусства» —
-    ///   воин + жрец дают монаха, «Чародейство» — лучник + жрец дают мага;
-    /// • «Былины»: линия 5+ любых юнитов даёт богатыря (6 — ★★, 7 — ★★★). Богатырь всегда один:
-    ///   чтобы призвать нового, старого надо продать.
-    /// Размер поля и запас символов растут с населением (CityManager).
+    ///   воин + жрец дают монаха (нужен ещё монастырь на горе), «Чародейство» — лучник + жрец дают мага
+    ///   (нужна ещё башня магов на волшебном источнике);
+    /// • «Былины»: линия 5+ любых юнитов даёт богатыря (6 — ★★, 7 — ★★★) — вожака отряда. Богатырей не больше
+    ///   BenchManager.maxHeroes: чтобы призвать ещё, кого-то надо продать.
+    /// Одним ходом сложить нечего — поле перемешивается само. Размер поля и запас символов растут с населением (CityManager).
+    /// Кнопки фокуса («Следующий ход: 🪙 ⚒ 🍎») на этой вкладке решают, чего больше упадёт в сбор ресурсов.
     /// </summary>
     public class CityGridManager : MatchBoard
     {
@@ -127,16 +132,12 @@ namespace Casiwar
         public TMP_Text[] focusLabels = new TMP_Text[3];
 
         [Header("Символы поля")]
-        [Tooltip("Юниты, которые могут выпасть (классовые — только если в городе есть их здание)")]
+        [Tooltip("Юниты, которые могут выпасть: ополченцы (нейтралы) и бойцы гильдий (только если гильдия построена)")]
         public List<UnitData> unitPool = new List<UnitData>();
         [Tooltip("Гибриды и богатырь (на поле не падают — получаются из смешанных линий)")]
         public List<UnitData> specialUnits = new List<UnitData>();
-        [Tooltip("Доля ресурсов (золото, ⚒, еда) среди новых символов; между собой они делятся по фокусу города")]
-        [Range(0f, 1f)] public float resourceChance = 0.48f;
-        [Tooltip("Вес нейтралов среди юнитов")]
-        [Min(0f)] public float neutralWeight = 1f;
-        [Tooltip("Вес каждого открытого класса среди юнитов")]
-        [Min(0f)] public float classWeight = 0.8f;
+        [Tooltip("Доля горожан среди символов (остальное — ополченцы). Каждая гильдия забирает треть горожан своими бойцами")]
+        [Range(0f, 0.9f)] public float civilianShare = 0.5f;
 
         [Header("Правила")]
         [Tooltip("Линия длиннее трёх даёт юнита выше уровнем: +1 за каждый лишний символ, но не выше этого")]
@@ -229,7 +230,7 @@ namespace Casiwar
         {
             if (city == null) return;
             city.CycleFocus((ResourceType)Mathf.Clamp(resourceIndex, 0, 2));
-            ShowMessage($"Завтра на поле: {FocusText(tomorrow: true)} (сегодня {FocusText(tomorrow: false)})");
+            ShowMessage($"Сбор ресурсов со следующего хода: {FocusText(tomorrow: true)} (сейчас {FocusText(tomorrow: false)})");
         }
 
         /// <summary>Фокус символами: «🪙🪙 : ⚒ : 🍎».</summary>
@@ -240,12 +241,6 @@ namespace Casiwar
                 .Select(r => GameVisuals.FocusIcons(r, tomorrow ? city.FocusTomorrow(r) : city.FocusToday(r))));
         }
 
-        /// <summary>Шанс, что новый символ — этот ресурс (сегодняшний фокус).</summary>
-        public float ResourceChance(ResourceType resource)
-        {
-            return resourceChance * (city != null ? city.FocusShare(resource) : 1f / 3f);
-        }
-
         private void UpdateFocusUi()
         {
             if (focusLabels == null || city == null) return;
@@ -253,6 +248,13 @@ namespace Casiwar
             {
                 if (focusLabels[i] != null) focusLabels[i].text = GameVisuals.FocusIcons((ResourceType)i, city.FocusTomorrow((ResourceType)i));
             }
+        }
+
+        /// <summary>Кнопка «Авто» под полем (сцены, где она ещё ведёт сюда): авто-спины вербовки.</summary>
+        public override void ToggleAutoPlay()
+        {
+            RecruitSlot recruit = game != null ? game.recruit : FindFirstObjectByType<RecruitSlot>();
+            if (recruit != null) recruit.ToggleAuto();
         }
 
         /// <summary>Устарело: приоритетов больше нет (кнопки из старых сцен ничего не делают).</summary>
@@ -266,54 +268,72 @@ namespace Casiwar
             if (bar != null && bar != transform && bar.GetComponentInParent<Canvas>() != null) bar.gameObject.SetActive(false);
         }
 
+        /// <summary>
+        /// Новый символ: горожанин (его треть забирает каждая построенная гильдия — тогда это её боец)
+        /// или ополченец (его треть забирает каждый усилитель — тогда это боец класса усилителя).
+        /// </summary>
         protected override TileData CreateRandomTile()
         {
-            float roll = Random.value;
-            foreach (ResourceType resource in new[] { ResourceType.Gold, ResourceType.Production, ResourceType.Food })
+            if (Random.value < civilianShare)
             {
-                roll -= ResourceChance(resource);
-                if (roll < 0f) return TileData.ForResource(resource);
+                var guilds = UnitClasses.Base.Where(c => city != null && city.IsClassUnlocked(c)).ToList();
+                int third = Random.Range(0, 3);
+                UnitData recruit = third < guilds.Count ? PickUnit(guilds[third]) : null;
+                return recruit != null ? TileData.ForUnit(recruit) : TileData.ForCivilian();
             }
-            UnitData unit = PickUnit();
-            return unit != null ? TileData.ForUnit(unit) : TileData.ForResource(ResourceType.Gold);
+            UnitData militia = PickNeutral();
+            if (militia == null) return TileData.ForCivilian();
+            return TileData.ForUnit(ReplaceNeutral(militia));
         }
 
-        private UnitData PickUnit()
+        /// <summary>Усилители (плавильня, лесопилка, храм): ополченец заменяется их классом — каждый усилитель забирает треть.</summary>
+        private UnitData ReplaceNeutral(UnitData neutral)
         {
-            float total = 0f;
-            foreach (UnitData unit in unitPool)
+            if (city == null) return neutral;
+            float roll = Random.value;
+            foreach (UnitClass unitClass in UnitClasses.Base)
             {
-                if (unit != null) total += UnitWeight(unit);
+                roll -= city.NeutralReplaceChance(unitClass);
+                if (roll < 0f) return PickUnit(unitClass) ?? neutral;
             }
-            if (total <= 0f) return null;
+            return neutral;
+        }
 
+        private UnitData PickNeutral() => PickWeighted(unitPool.Where(u => u != null && u.IsNeutral));
+
+        /// <summary>
+        /// Юнит класса из пула (None — ополченец) для вербовки: случайный по весу появления, а deterministic — всегда
+        /// один и тот же (для рисунка символа на барабане). null — таких в пуле нет.
+        /// </summary>
+        public UnitData RandomUnit(UnitClass unitClass, bool deterministic = false)
+        {
+            IEnumerable<UnitData> candidates = unitClass == UnitClass.None
+                ? unitPool.Where(u => u != null && u.IsNeutral)
+                : unitPool.Where(u => u != null && u.unitClass == unitClass);
+            return deterministic ? candidates.FirstOrDefault() : PickWeighted(candidates);
+        }
+
+        /// <summary>Случайный юнит класса из пула (по весу появления); null — таких нет.</summary>
+        private UnitData PickUnit(UnitClass unitClass) =>
+            PickWeighted(unitPool.Where(u => u != null && u.unitClass == unitClass && UnitClasses.IsBase(unitClass)));
+
+        private static UnitData PickWeighted(IEnumerable<UnitData> candidates)
+        {
+            List<UnitData> list = candidates.ToList();
+            float total = list.Sum(u => Mathf.Max(0f, u.spawnWeight));
+            if (list.Count == 0) return null;
+            if (total <= 0f) return list[Random.Range(0, list.Count)];
             float roll = Random.value * total;
-            UnitData last = null;
-            foreach (UnitData unit in unitPool)
+            foreach (UnitData unit in list)
             {
-                if (unit == null || UnitWeight(unit) <= 0f) continue;
-                last = unit;
-                roll -= UnitWeight(unit);
+                roll -= Mathf.Max(0f, unit.spawnWeight);
                 if (roll <= 0f) return unit;
             }
-            return last;
-        }
-
-        private float UnitWeight(UnitData unit)
-        {
-            if (unit.IsNeutral) return neutralWeight * unit.spawnWeight;
-            if (!UnitClasses.IsBase(unit.unitClass)) return 0f; // гибриды на поле не падают
-            if (city == null || !city.IsClassUnlocked(unit.unitClass)) return 0f; // нет здания — нет класса
-            return classWeight * unit.spawnWeight;
+            return list[list.Count - 1];
         }
 
         protected override void CollectRun(MatchRun run)
         {
-            if (run.Kind == TileKind.Resource)
-            {
-                CollectResource(run.Resource, run.Length);
-                return;
-            }
             if (!run.IsUnitRun) return;
 
             var tiles = run.Cells.Select(cell => grid[cell.x, cell.y]).ToList();
@@ -336,29 +356,9 @@ namespace Casiwar
             {
                 int gold = recruit.GetSellPrice(plan.Stars, plan.Level);
                 game.AddGold(gold);
-                ShowMessage($"Скамейка полна: {recruit.unitName} продан за {gold} {GameVisuals.IconGold}");
-            }
-        }
-
-        private void CollectResource(ResourceType resource, int symbols)
-        {
-            switch (resource)
-            {
-                case ResourceType.Gold:
-                    int gold = symbols * (city != null ? city.GoldPerCoin : 1);
-                    if (game != null) game.AddGold(gold);
-                    ShowMessage($"+{gold} {GameVisuals.IconGold}");
-                    break;
-                case ResourceType.Production:
-                    int production = symbols * (city != null ? city.ProductionPerSymbol : 1);
-                    if (city != null) city.AddProduction(production);
-                    ShowMessage($"+{production} {GameVisuals.IconProduction}");
-                    break;
-                case ResourceType.Food:
-                    int food = symbols * (city != null ? city.FoodPerSymbol : 1);
-                    if (city != null) city.AddFood(food);
-                    ShowMessage($"+{food} {GameVisuals.IconFood}");
-                    break;
+                ShowMessage(plan.IsHero
+                    ? $"Богатырей уже предел (или гарнизон полон): {recruit.unitName} ушёл, +{gold} {GameVisuals.IconGold}"
+                    : $"Гарнизон полон: {recruit.unitName} продан за {gold} {GameVisuals.IconGold}");
             }
         }
 

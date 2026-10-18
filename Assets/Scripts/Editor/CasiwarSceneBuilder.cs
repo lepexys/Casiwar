@@ -30,7 +30,7 @@ namespace Casiwar.EditorTools
         /// Версия сцены: поднимайте при каждом изменении того, что строит сборщик (UI, префабы, связи).
         /// Сцена старой версии → редактор сам предложит её пересобрать (CasiwarSceneUpdateCheck).
         /// </summary>
-        public const int SceneVersion = 15;
+        public const int SceneVersion = 26;
         public const string FontAssetPath = FontsFolder + "/Casiwar SDF.asset";
         public const string IconsSpriteAssetPath = FontsFolder + "/Casiwar Icons.asset";
         private const string UnitsFolder = "Assets/Data/Units";
@@ -46,7 +46,9 @@ namespace Casiwar.EditorTools
         private const float LandTabHeight = 868f;
         private const float RosterHeight = 190f; // панель наших юнитов внизу экрана боя
         private const int IconSize = 128;
-        private const string IconsVersion = "casiwar-icons-v5";
+        private const string IconsVersion = "casiwar-icons-v8";
+        /// <summary>Иконок в ряду атласа: атлас — сетка (полоса в одну строку шире 2048 px, и Unity её ужимает).</summary>
+        private const int IconColumns = 8;
 
         /// <summary>Символы, которые сразу запекаются в атлас шрифта (остальные добавятся динамически).</summary>
         private const string PrebakedCharacters =
@@ -64,7 +66,6 @@ namespace Casiwar.EditorTools
         private static readonly Color BuildColor = new Color(0.30f, 0.46f, 0.70f);
         private static readonly Color FightColor = new Color(0.85f, 0.30f, 0.25f);
         private static readonly Color SellColor = new Color(0.62f, 0.30f, 0.30f);
-        private static readonly Color FaithColor = new Color(0.45f, 0.36f, 0.66f);
         private static readonly Color GoldText = new Color(1f, 0.82f, 0.30f);
         private static readonly Color MutedText = new Color(0.75f, 0.78f, 0.85f);
 
@@ -260,7 +261,9 @@ namespace Casiwar.EditorTools
             var battleGo = new GameObject("Battle");
             battleGo.transform.position = new Vector3(0f, -2.1f, 0f); // центр клеточной арены
             AutoBattleManager battle = battleGo.AddComponent<AutoBattleManager>();
-            BattleSlotMachine slotMachine = new GameObject("SlotMachine").AddComponent<BattleSlotMachine>();
+            BattleBoard battleBoard = new GameObject("BattleBoard").AddComponent<BattleBoard>();
+            RecruitSlot recruit = game.gameObject.AddComponent<RecruitSlot>();
+            WorldPowers powers = new GameObject("World").AddComponent<WorldPowers>();
 
             new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
 
@@ -295,10 +298,11 @@ namespace Casiwar.EditorTools
             Flex(boardTabButton.gameObject, 1f);
             Button unitsTabButton = NewButton("Btn_TabUnits", tabBar, "Войска", ButtonColor, 32f, out _);
             Flex(unitsTabButton.gameObject, 1f);
-            Button fightButton = NewButton("Btn_Fight", tabBar, "В БОЙ!", FightColor, 34f, out _);
+            // «Конец хода», а когда враг в наших границах — «В БОЙ!» (подпись меняет GameManager)
+            Button fightButton = NewButton("Btn_Fight", tabBar, "Конец хода", FightColor, 34f, out _);
             Flex(fightButton.gameObject, 1.15f);
 
-            // --- Вкладка «Поле»: здесь только складываем юнитов и ресурсы ---
+            // --- Вкладка «Поле»: вербовка (окно слота RecruitSlot строит сам в GridContainer) и фокус сбора ресурсов ---
             RectTransform boardTab = NewRect("BoardTab", prep);
             TopStretch(boardTab, 112f, 1196f, 0f);
 
@@ -308,11 +312,11 @@ namespace Casiwar.EditorTools
             AddImage(gridArea, GridBg, sliced: true, raycast: false);
             gridArea.gameObject.AddComponent<RectMask2D>();
 
-            // Фокус на завтра: каких ресурсов больше упадёт на поле со следующего дня (юниты — как обычно)
+            // Фокус сбора: каких ресурсов больше упадёт в сбор ресурсов со следующего хода
             RectTransform focusBar = NewRect("FocusBar", boardTab);
             TopStretch(focusBar, 1012f, 80f, 20f);
             AddRow(focusBar, 10f);
-            TextMeshProUGUI focusTitle = NewText("Label", focusBar, "Завтра больше:", 30f, TextAlignmentOptions.MidlineLeft, MutedText);
+            TextMeshProUGUI focusTitle = NewText("Label", focusBar, "Сбор след. хода:", 30f, TextAlignmentOptions.MidlineLeft, MutedText);
             AutoSize(focusTitle, 16f, 30f);
             Flex(focusTitle.gameObject, 1.3f);
             var focusLabels = new TMP_Text[3];
@@ -329,11 +333,10 @@ namespace Casiwar.EditorTools
             RectTransform boardControls = NewRect("ControlsBar", boardTab);
             TopStretch(boardControls, 1100f, 92f, 20f);
             AddRow(boardControls, 14f);
-            TextMeshProUGUI reserveText = NewText("ReserveText", boardControls, "Ходы: 10", 34f, TextAlignmentOptions.Center, Color.white, bold: true);
+            TextMeshProUGUI reserveText = NewText("ReserveText", boardControls, "Спины вербовки", 34f, TextAlignmentOptions.Center, Color.white, bold: true);
             AutoSize(reserveText, 16f, 34f);
             Flex(reserveText.gameObject, 1.3f);
-            Button reshuffleButton = NewButton("Btn_Reshuffle", boardControls, "Перемешать (0)", FaithColor, 28f, out TextMeshProUGUI reshuffleLabel);
-            Flex(reshuffleButton.gameObject, 1f);
+            // «Перемешать» больше нет: поле перемешивается само, когда одним ходом сложить нечего
             Button autoButton = NewButton("Btn_Auto", boardControls, "Авто: ВЫКЛ", AutoColor, 30f, out TextMeshProUGUI autoLabel);
             Flex(autoButton.gameObject, 0.9f);
 
@@ -363,71 +366,23 @@ namespace Casiwar.EditorTools
             CityMapView mapView = cityTab.gameObject.AddComponent<CityMapView>();
             cityTab.gameObject.SetActive(false);
 
-            // --- Вкладка «Наука»: единое дерево технологий за очки знаний ---
+            // --- Вкладка «Наука»: дерево технологий за очки знаний (как дерево прокачки в tower defense) ---
             RectTransform techTab = NewRect("TechTab", prep);
             TopStretch(techTab, 112f, 1300f, 0f);
             TextMeshProUGUI techSummary = NewText("SummaryText", techTab, string.Empty, 24f, TextAlignmentOptions.Center, MutedText);
             TopStretch(techSummary.rectTransform, 0f, 70f, 20f);
             AutoSize(techSummary, 14f, 24f);
-            string[] branchTitles = { "Хозяйство", "Знания", "Пехота", "Стрелки", "Вера" };
-            var columns = new RectTransform[branchTitles.Length];
-            var techHeaders = new RectTransform[branchTitles.Length];
-            for (int i = 0; i < branchTitles.Length; i++)
-            {
-                float x = (i - 2f) * 210f;
-                TextMeshProUGUI header = NewText($"Header_{i}", techTab, branchTitles[i], 26f, TextAlignmentOptions.Center, GoldText, bold: true);
-                Anchored(header.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -76f), new Vector2(200f, 40f));
-                AutoSize(header, 16f, 26f);
-                techHeaders[i] = header.rectTransform;
-                RectTransform column = NewRect($"Column_{i}", techTab);
-                Anchored(column, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -120f), new Vector2(200f, 1060f));
-                var columnLayout = column.gameObject.AddComponent<VerticalLayoutGroup>();
-                columnLayout.spacing = 0f; // между карточками — стрелки и отступы TechTreeView
-                columnLayout.childAlignment = TextAnchor.UpperCenter;
-                columnLayout.childControlWidth = true;
-                columnLayout.childForceExpandWidth = true;
-                columnLayout.childControlHeight = false;
-                columnLayout.childForceExpandHeight = false;
-                columns[i] = column;
-            }
+            // Само дерево (узлы, линии, подробности) TechTreeView строит кодом под сводкой
             TechTreeView techView = techTab.gameObject.AddComponent<TechTreeView>();
             techTab.gameObject.SetActive(false);
 
-            // --- Вкладка «Войска»: прокачка отрядов в гильдиях — ближний бой, дальний бой, магия ---
+            // --- Вкладка «Войска»: общее дерево прокачки гильдий, гибридов и богатыря ---
             RectTransform unitsTab = NewRect("UnitsTab", prep);
             TopStretch(unitsTab, 112f, 1300f, 0f);
             TextMeshProUGUI unitsSummary = NewText("SummaryText", unitsTab, string.Empty, 22f, TextAlignmentOptions.Center, MutedText);
             TopStretch(unitsSummary.rectTransform, 0f, 64f, 20f);
             AutoSize(unitsSummary, 13f, 22f);
-            string[] branchNames = { "Ближний бой", "Дальний бой", "Магия" };
-            UnitClass[] branchClasses = { UnitClass.Warrior, UnitClass.Archer, UnitClass.Priest };
-            var unitColumns = new RectTransform[branchNames.Length];
-            var unitViewports = new RectTransform[branchNames.Length];
-            var unitStatus = new TMP_Text[branchNames.Length];
-            var unitHeaders = new RectTransform[branchNames.Length];
-            for (int i = 0; i < branchNames.Length; i++)
-            {
-                float x = (i - 1) * 350f;
-                TextMeshProUGUI header = NewText($"Branch_{i}", unitsTab, branchNames[i], 30f, TextAlignmentOptions.Center,
-                    Color.Lerp(GameVisuals.ClassColor(branchClasses[i]), Color.white, 0.25f), bold: true);
-                Anchored(header.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -70f), new Vector2(330f, 38f));
-                unitHeaders[i] = header.rectTransform;
-                TextMeshProUGUI status = NewText($"Status_{i}", unitsTab, string.Empty, 20f, TextAlignmentOptions.Center, MutedText);
-                Anchored(status.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(x, -108f), new Vector2(330f, 30f));
-                AutoSize(status, 12f, 20f);
-                // Колонка прокручивается (колесо мыши, свайп, полоса справа): у гильдий с гибридами улучшений больше,
-                // чем влезает. По высоте — до низа вкладки, чтобы и последняя карточка не уходила за край экрана
-                RectTransform branch = NewRect($"BranchColumn_{i}", unitsTab);
-                branch.anchorMin = new Vector2(0.5f, 0f);
-                branch.anchorMax = new Vector2(0.5f, 1f);
-                branch.pivot = new Vector2(0.5f, 1f);
-                branch.anchoredPosition = new Vector2(x, -142f);
-                branch.sizeDelta = new Vector2(330f, -154f);
-                RectTransform column = ScrollList(branch, 8f);
-                unitColumns[i] = column;
-                unitViewports[i] = branch;
-                unitStatus[i] = status;
-            }
+            // Дерево войск (гильдии, гибриды, богатырь; узлы и линии) UnitTreeView строит кодом под сводкой
             UnitTreeView unitView = unitsTab.gameObject.AddComponent<UnitTreeView>();
             unitsTab.gameObject.SetActive(false);
 
@@ -450,7 +405,8 @@ namespace Casiwar.EditorTools
             TextMeshProUGUI legend = NewText("Legend", arena, string.Empty, 22f, TextAlignmentOptions.TopLeft, MutedText);
             Anchored(legend.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(16f, -110f), new Vector2(196f, 520f));
             AutoSize(legend, 10f, 22f);
-            Button speedButton = NewButton("Btn_Speed", arena, "Скорость ×1", ButtonColor, 30f, out TextMeshProUGUI speedLabel);
+            // Бой в реальном времени: поле три в ряд (BattleBoard) в SlotGrid, арена, кнопка скорости
+            Button speedButton = NewButton("Btn_Speed", arena, $"{GameVisuals.IconSpeed}×1", ButtonColor, 40f, out TextMeshProUGUI speedLabel);
             Anchored((RectTransform)speedButton.transform, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-12f, -12f), new Vector2(196f, 84f));
 
             TextMeshProUGUI slotResult = NewText("SlotResultText", arena, string.Empty, 34f, TextAlignmentOptions.Center, GoldText, bold: true);
@@ -491,7 +447,7 @@ namespace Casiwar.EditorTools
             }
             battleScreen.gameObject.SetActive(false);
 
-            // ===== Трофеи: слот 5×3 с линиями выплат, круток — по числу выживших =====
+            // ===== Трофеи: слот 5×3 с линиями выплат, круток — по звёздам убитых врагов =====
             RectTransform lootScreen = NewRect("LootScreen", root);
             Stretch(lootScreen, 0f, 0f, HudHeight, 0f);
             AddImage(lootScreen, ScreenBg, sliced: false, raycast: true);
@@ -499,8 +455,7 @@ namespace Casiwar.EditorTools
             TextMeshProUGUI lootTitle = NewText("Title", loot, "Трофеи за победу!", 52f, TextAlignmentOptions.Center, GoldText, bold: true);
             TopStretch(lootTitle.rectTransform, 10f, 64f, 20f);
             TextMeshProUGUI lootHint = NewText("Hint", loot,
-                "Круток — по звёздам выживших: ★ — 1, ★★ — 2, ★★★ — 3. Меч — оружие, щит — броня, они одни на всех. " +
-                "3+ одинаковых подряд по линии с левого барабана: 3 → I, 4 → II, 5 → III. Чей трофей — решает фигура линии:",
+                $"{GameVisuals.IconStar} убитого врага = {GameVisuals.IconSpin}1 · 3+ подряд по линии слева: 3 → I, 4 → II, 5 → III · фигура линии — чей трофей:",
                 26f, TextAlignmentOptions.Center, MutedText);
             TopStretch(lootHint.rectTransform, 76f, 84f, 30f);
             AutoSize(lootHint, 16f, 26f);
@@ -512,12 +467,12 @@ namespace Casiwar.EditorTools
             RectTransform lootControls = NewRect("ControlsBar", loot);
             TopStretch(lootControls, 860f, 96f, 20f);
             AddRow(lootControls, 12f);
-            TextMeshProUGUI lootSpins = NewText("SpinsText", lootControls, "Круток: 0", 32f, TextAlignmentOptions.Center, Color.white, bold: true);
+            TextMeshProUGUI lootSpins = NewText("SpinsText", lootControls, $"{GameVisuals.IconSpin} 0", 32f, TextAlignmentOptions.Center, Color.white, bold: true);
             AutoSize(lootSpins, 16f, 32f);
             Flex(lootSpins.gameObject, 1.1f);
-            Button lootSpinButton = NewButton("Btn_LootSpin", lootControls, "Крутить", FightColor, 36f, out _);
+            Button lootSpinButton = NewButton("Btn_LootSpin", lootControls, GameVisuals.IconSpin, FightColor, 44f, out _);
             Flex(lootSpinButton.gameObject, 1f);
-            Button lootAutoButton = NewButton("Btn_LootAuto", lootControls, "Авто: ВЫКЛ", AutoColor, 30f, out TextMeshProUGUI lootAutoLabel);
+            Button lootAutoButton = NewButton("Btn_LootAuto", lootControls, GameVisuals.IconPause, AutoColor, 44f, out TextMeshProUGUI lootAutoLabel);
             Flex(lootAutoButton.gameObject, 0.9f);
             Button lootNextButton = NewButton("Btn_LootNext", lootControls, "Дальше", BuildColor, 34f, out _);
             Flex(lootNextButton.gameObject, 0.9f);
@@ -526,12 +481,13 @@ namespace Casiwar.EditorTools
             AutoSize(lootLog, 16f, 28f);
             lootScreen.gameObject.SetActive(false);
 
-            // ===== Скамейка (видна на поле и на трофеях) =====
+            // ===== Армия: отряд (вожак + бойцы) и гарнизон — видна на поле, на трофеях и на карте у ратуши/отряда =====
+            // Обе линейки BenchManager раскладывает сам по ширине панели
             RectTransform benchPanel = NewRect("BenchPanel", root);
             BottomStretch(benchPanel, 0f, 400f, 0f);
             AddImage(benchPanel, PanelBg, sliced: false, raycast: true);
             RectTransform benchColumn = Column("Content", benchPanel, 1080f);
-            TextMeshProUGUI benchTitle = NewText("Title", benchColumn, "Армия: три одинаковых = ★ выше (уровень — средний). Первые слоты — передняя шеренга",
+            TextMeshProUGUI benchTitle = NewText("Title", benchColumn, "Отряд ходит по карте, гарнизон защищает город",
                 26f, TextAlignmentOptions.Center, MutedText);
             TopStretch(benchTitle.rectTransform, 10f, 44f, 20f);
             AutoSize(benchTitle, 14f, 26f);
@@ -595,28 +551,15 @@ namespace Casiwar.EditorTools
 
             // Деревья науки и войск высокие — колонки шире, а вкладка целиком чуть мельче
             Landscape(techTab, r => Anchored(r, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -112f), new Vector2(1700f, 1100f)), 0.78f);
-            for (int i = 0; i < columns.Length; i++)
-            {
-                float x = (i - 2f) * 335f;
-                Landscape(techHeaders[i], r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 320f);
-                Landscape(columns[i], r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 320f);
-            }
             Landscape(unitsTab, r => Anchored(r, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -112f), new Vector2(1800f, 1180f)), 0.735f);
-            for (int i = 0; i < unitColumns.Length; i++)
-            {
-                float x = (i - 1) * 580f;
-                Landscape(unitHeaders[i], r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 540f);
-                Landscape(unitStatus[i].rectTransform, r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 540f);
-                Landscape(unitViewports[i], r => r.anchoredPosition = new Vector2(x, r.anchoredPosition.y), width: 540f);
-            }
 
             // Бой: слева слот и подписи, посередине легенда, справа — арена (камера вписывает её в ArenaFrame)
             Landscape(arena, r => Stretch(r, 0f, 0f, 0f, 0f));
             Landscape(stepText.rectTransform, r => TopLeft(r, 20f, 12f, 200f, 84f));
             Landscape((RectTransform)speedButton.transform, r => TopLeft(r, 524f, 12f, 196f, 84f));
-            Landscape(slotPanel, r => TopLeft(r, 20f, 108f, 700f, 700f));
-            Landscape(slotResult.rectTransform, r => TopLeft(r, 20f, 816f, 700f, 56f));
-            Landscape(enemyTurn.rectTransform, r => TopLeft(r, 20f, 876f, 700f, 44f));
+            Landscape(slotPanel, r => TopLeft(r, 60f, 108f, 620f, 620f));
+            Landscape(slotResult.rectTransform, r => TopLeft(r, 20f, 760f, 700f, 48f));
+            Landscape(enemyTurn.rectTransform, r => TopLeft(r, 20f, 820f, 700f, 44f));
             Landscape(legend.rectTransform, r => TopLeft(r, 740f, 108f, 225f, 860f));
             Landscape(arenaFrame, r => Stretch(r, 980f, 20f, 12f, RosterHeight + 24f));
             Landscape(battleResult.rectTransform, r => Stretch(r, 980f, 20f, 12f, RosterHeight + 24f));
@@ -671,6 +614,7 @@ namespace Casiwar.EditorTools
             game.battle = battle;
             game.city = city;
             game.techTree = techTree;
+            game.powers = powers;
             game.prepScreen = prepScreen.gameObject;
             game.boardTab = boardTab.gameObject;
             game.cityTab = cityTab.gameObject;
@@ -697,6 +641,8 @@ namespace Casiwar.EditorTools
             game.startingUnits = new List<UnitData> { starter, starter };
 
             city.techTree = techTree;
+            powers.city = city;
+            powers.battle = battle;
 
             cityGrid.gridContainer = gridArea;
             cityGrid.tilePrefab = prefabs.Tile;
@@ -706,8 +652,6 @@ namespace Casiwar.EditorTools
             cityGrid.game = game;
             cityGrid.city = city;
             cityGrid.focusLabels = focusLabels;
-            cityGrid.reshuffleButton = reshuffleButton;
-            cityGrid.reshuffleLabel = reshuffleLabel;
             cityGrid.unitPool = new List<UnitData>(units);
             cityGrid.specialUnits = new List<UnitData>(specialUnits);
 
@@ -727,7 +671,7 @@ namespace Casiwar.EditorTools
             bench.infoText = benchInfo;
             bench.sellButton = sellButton;
 
-            battle.slotMachine = slotMachine;
+            battle.board = battleBoard;
             battle.city = city;
             battle.stepText = stepText;
             battle.resultText = battleResult;
@@ -738,13 +682,20 @@ namespace Casiwar.EditorTools
             battle.enemyPool = new List<UnitData>(barbarians);
             battle.enemySpecials = new List<UnitData>(enemySpecials);
 
-            slotMachine.gridContainer = slotGrid;
-            slotMachine.cellPrefab = prefabs.Tile;
-            slotMachine.city = city;
-            slotMachine.resultText = slotResult;
+            battleBoard.gridContainer = slotGrid;
+            battleBoard.cellPrefab = prefabs.Tile;
+            battleBoard.city = city;
+            battleBoard.resultText = slotResult;
+
+            game.recruit = recruit;
+            recruit.city = city;
+            recruit.board = cityGrid;
+            recruit.bench = bench;
+            recruit.game = game;
 
             mapView.city = city;
             mapView.game = game;
+            mapView.powers = powers;
             mapView.mapContainer = map;
             mapView.cellPrefab = prefabs.CityCell;
             mapView.summaryText = citySummary;
@@ -756,16 +707,11 @@ namespace Casiwar.EditorTools
             techView.techTree = techTree;
             techView.game = game;
             techView.city = city;
-            techView.columns = columns;
-            techView.cardPrefab = prefabs.TechCard;
             techView.summaryText = techSummary;
 
             unitView.city = city;
             unitView.techTree = techTree;
             unitView.game = game;
-            unitView.columns = unitColumns;
-            unitView.columnStatus = unitStatus;
-            unitView.cardPrefab = prefabs.UpgradeCard;
             unitView.summaryText = unitsSummary;
 
             // ---------- Кнопки ----------
@@ -773,9 +719,8 @@ namespace Casiwar.EditorTools
             UnityEventTools.AddPersistentListener(cityTabButton.onClick, game.ShowCityTab);
             UnityEventTools.AddPersistentListener(techTabButton.onClick, game.ShowTechTab);
             UnityEventTools.AddPersistentListener(unitsTabButton.onClick, game.ShowUnitsTab);
-            UnityEventTools.AddPersistentListener(fightButton.onClick, game.StartBattle);
-            UnityEventTools.AddPersistentListener(autoButton.onClick, cityGrid.ToggleAutoPlay);
-            UnityEventTools.AddPersistentListener(reshuffleButton.onClick, cityGrid.ReshuffleOnce);
+            UnityEventTools.AddPersistentListener(fightButton.onClick, game.EndTurn);
+            UnityEventTools.AddPersistentListener(autoButton.onClick, recruit.ToggleAuto);
             UnityEventTools.AddPersistentListener(lootSpinButton.onClick, lootSlot.Spin);
             UnityEventTools.AddPersistentListener(lootAutoButton.onClick, lootSlot.ToggleAutoSpin);
             UnityEventTools.AddPersistentListener(lootNextButton.onClick, game.FinishLoot);
@@ -878,7 +823,7 @@ namespace Casiwar.EditorTools
                 Anchored(group, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2((g - (classes.Length - 1) * 0.5f) * (groupWidth + 6f), 0f),
                     new Vector2(groupWidth, 136f));
                 AddImage(group, CardBg, sliced: true, raycast: false);
-                TextMeshProUGUI caption = NewText("Caption", group, $"{LootSlotMachine.Recipients(unitClass)} — {LootSlotMachine.ShapeName(unitClass)}",
+                TextMeshProUGUI caption = NewText("Caption", group, $"{GameVisuals.ClassIcon(unitClass)} {LootSlotMachine.ShapeName(unitClass)}",
                     26f, TextAlignmentOptions.Center, classColor, bold: true);
                 TopStretch(caption.rectTransform, 6f, 34f, 8f);
                 AutoSize(caption, 14f, 26f);
@@ -1090,20 +1035,47 @@ namespace Casiwar.EditorTools
         {
             public string Name;
             public uint Unicode;
+            /// <summary>Рисунок из многоугольников…</summary>
+            public System.Func<List<Layer>> Draw;
+            /// <summary>…или готовая картинка (иконки классов с фишек поля) — на кружке цвета класса, как фишка.</summary>
+            public string Image;
+            public UnitClass Class;
         }
+
+        private const string ClassIconsFolder = "Assets/Art/Resources/Icons/";
 
         private static readonly IconSpec[] Icons =
         {
-            new IconSpec { Name = "star", Unicode = 0x2605 },        // ★ улучшения зданий
-            new IconSpec { Name = "production", Unicode = 0x2692 },  // ⚒ очки производства
-            new IconSpec { Name = "gold", Unicode = 0x1FA99 },       // 🪙 золото
-            new IconSpec { Name = "attack", Unicode = 0x2694 },      // ⚔ атака
-            new IconSpec { Name = "move", Unicode = 0x279C },        // ➜ перемещение
-            new IconSpec { Name = "food", Unicode = 0x1F34E },       // 🍎 еда
-            new IconSpec { Name = "population", Unicode = 0x1F464 }, // 👤 жители
-            new IconSpec { Name = "knowledge", Unicode = 0x1F4D6 },  // 📖 очки знаний
-            new IconSpec { Name = "banner", Unicode = 0x1F6A9 },     // 🚩 Знамя — джокер боевого слота
-            new IconSpec { Name = "candle", Unicode = 0x1F56F },     // 🕯 Свеча — 3+ в слоте: «Чудо»
+            new IconSpec { Name = "star", Unicode = 0x2605, Draw = StarIcon },              // ★ улучшения зданий
+            new IconSpec { Name = "production", Unicode = 0x2692, Draw = ProductionIcon },  // ⚒ очки производства
+            new IconSpec { Name = "gold", Unicode = 0x1FA99, Draw = GoldIcon },             // 🪙 золото
+            new IconSpec { Name = "attack", Unicode = 0x2694, Draw = AttackIcon },          // ⚔ атака
+            new IconSpec { Name = "move", Unicode = 0x279C, Draw = MoveIcon },              // ➜ перемещение
+            new IconSpec { Name = "food", Unicode = 0x1F34E, Draw = FoodIcon },             // 🍎 еда
+            new IconSpec { Name = "population", Unicode = 0x1F464, Draw = PopulationIcon }, // 👤 жители
+            new IconSpec { Name = "knowledge", Unicode = 0x1F4D6, Draw = BookIcon },        // 📖 очки знаний
+            new IconSpec { Name = "banner", Unicode = 0x1F6A9, Draw = FlagIcon },           // 🚩 Знамя — джокер боевого слота
+            new IconSpec { Name = "candle", Unicode = 0x1F56F, Draw = CandleIcon },         // 🕯 Свеча — 3+ в слоте: «Чудо»
+            // Свои значки (GameVisuals.Icon…): область частного использования — в шрифте их нет
+            new IconSpec { Name = "morale", Unicode = 0xE010, Draw = FlameIcon },
+            new IconSpec { Name = "hp", Unicode = 0xE011, Draw = HeartIcon },
+            new IconSpec { Name = "pause", Unicode = 0xE012, Draw = PauseIcon },
+            new IconSpec { Name = "play", Unicode = 0xE013, Draw = PlayIcon },
+            new IconSpec { Name = "speed", Unicode = 0xE014, Draw = SpeedIcon },
+            new IconSpec { Name = "turns", Unicode = 0xE015, Draw = HourglassIcon },
+            new IconSpec { Name = "dead", Unicode = 0xE016, Draw = SkullIcon },
+            new IconSpec { Name = "hold", Unicode = 0xE017, Draw = LockIcon },
+            new IconSpec { Name = "spin", Unicode = 0xE018, Draw = SpinIcon },
+            new IconSpec { Name = "walls", Unicode = 0xE019, Draw = TowerIcon },
+            // Классы — картинки с фишек поля (GameVisuals.ClassIcon)
+            new IconSpec { Name = "class_warrior", Unicode = 0xE001, Image = ClassIconsFolder + "warrior.png", Class = UnitClass.Warrior },
+            new IconSpec { Name = "class_archer", Unicode = 0xE002, Image = ClassIconsFolder + "archer.png", Class = UnitClass.Archer },
+            new IconSpec { Name = "class_priest", Unicode = 0xE003, Image = ClassIconsFolder + "priest.png", Class = UnitClass.Priest },
+            new IconSpec { Name = "class_bomber", Unicode = 0xE004, Image = ClassIconsFolder + "bomber.png", Class = UnitClass.Bomber },
+            new IconSpec { Name = "class_monk", Unicode = 0xE005, Image = ClassIconsFolder + "monk.png", Class = UnitClass.Monk },
+            new IconSpec { Name = "class_mage", Unicode = 0xE006, Image = ClassIconsFolder + "mage.png", Class = UnitClass.Mage },
+            new IconSpec { Name = "class_hero", Unicode = 0xE007, Image = ClassIconsFolder + "hero.png", Class = UnitClass.Hero },
+            new IconSpec { Name = "class_militia", Unicode = 0xE008, Image = ClassIconsFolder + "militia.png", Class = UnitClass.None },
         };
 
         /// <summary>
@@ -1132,6 +1104,7 @@ namespace Casiwar.EditorTools
                 importer.alphaIsTransparency = true;
                 importer.mipmapEnabled = false;
                 importer.textureCompression = TextureImporterCompression.Uncompressed;
+                importer.maxTextureSize = 4096; // иначе большой атлас ужмётся, и прямоугольники значков съедут
                 importer.userData = IconsVersion; // при изменении рисунков поднимите версию — атлас перерисуется
                 importer.SaveAndReimport();
                 var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(IconsTexturePath);
@@ -1150,7 +1123,7 @@ namespace Casiwar.EditorTools
                 {
                     // Метрики как у эмодзи из TMP Essentials (128×128) — иконка стоит на строке вровень с текстом
                     var glyph = new TMP_SpriteGlyph((uint)i, new GlyphMetrics(IconSize, IconSize, 0f, 112f, IconSize),
-                        new GlyphRect(i * IconSize, 0, IconSize, IconSize), 1f, 0);
+                        new GlyphRect(i % IconColumns * IconSize, i / IconColumns * IconSize, IconSize, IconSize), 1f, 0);
                     icons.spriteGlyphTable.Add(glyph);
                     icons.spriteCharacterTable.Add(new TMP_SpriteCharacter(Icons[i].Unicode, glyph) { name = Icons[i].Name });
                 }
@@ -1193,13 +1166,55 @@ namespace Casiwar.EditorTools
 
         private static Texture2D DrawIconAtlas()
         {
-            var texture = new Texture2D(IconSize * Icons.Length, IconSize, TextureFormat.RGBA32, false);
+            int rows = (Icons.Length + IconColumns - 1) / IconColumns;
+            var texture = new Texture2D(IconSize * IconColumns, IconSize * rows, TextureFormat.RGBA32, false);
             var pixels = new Color32[texture.width * texture.height];
-            List<Layer>[] icons = { StarIcon(), ProductionIcon(), GoldIcon(), AttackIcon(), MoveIcon(), FoodIcon(), PopulationIcon(), BookIcon(), FlagIcon(), CandleIcon() };
-            for (int i = 0; i < icons.Length; i++) Rasterize(icons[i], pixels, texture.width, i * IconSize);
+            for (int i = 0; i < Icons.Length; i++)
+            {
+                // Клетка i: столбец i % IconColumns, строка i / IconColumns (снизу вверх — как GlyphRect у TMP)
+                int offset = i / IconColumns * IconSize * texture.width + i % IconColumns * IconSize;
+                if (Icons[i].Image != null) BlitImage(Icons[i].Image, pixels, texture.width, offset, GameVisuals.IconBackground(Icons[i].Class));
+                else Rasterize(Icons[i].Draw(), pixels, texture.width, offset);
+            }
             texture.SetPixels32(pixels);
             texture.Apply();
             return texture;
+        }
+
+        /// <summary>
+        /// Картинку с диска — в клетку атласа, с сохранением пропорций, поверх кружка цвета background
+        /// (в тексте тонкий меч или книга без подложки теряются). Нет файла — клетка пустая.
+        /// </summary>
+        private static void BlitImage(string path, Color32[] pixels, int textureWidth, int offsetX, Color background)
+        {
+            if (!File.Exists(path)) return;
+            var source = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            if (!source.LoadImage(File.ReadAllBytes(path)))
+            {
+                Object.DestroyImmediate(source);
+                return;
+            }
+            float fit = IconSize * 0.80f / Mathf.Max(source.width, source.height);
+            float width = source.width * fit, height = source.height * fit;
+            float left = (IconSize - width) * 0.5f, bottom = (IconSize - height) * 0.5f;
+            for (int y = 0; y < IconSize; y++)
+            {
+                for (int x = 0; x < IconSize; x++)
+                {
+                    // Подложка: кружок цвета класса с тёмной обводкой
+                    float distance = new Vector2(x + 0.5f - IconSize * 0.5f, y + 0.5f - IconSize * 0.5f).magnitude;
+                    float outer = Mathf.Clamp01(IconSize * 0.49f - distance);
+                    float inner = Mathf.Clamp01(IconSize * 0.45f - distance);
+                    Color baseColor = Color.Lerp(new Color(Outline.r, Outline.g, Outline.b, outer), new Color(background.r, background.g, background.b, 1f), inner);
+                    baseColor.a = outer;
+                    float u = (x + 0.5f - left) / width, v = (y + 0.5f - bottom) / height;
+                    Color art = u < 0f || v < 0f || u > 1f || v > 1f ? new Color(0f, 0f, 0f, 0f) : source.GetPixelBilinear(u, v);
+                    float alpha = art.a + baseColor.a * (1f - art.a);
+                    Color rgb = (art * art.a + baseColor * baseColor.a * (1f - art.a)) / Mathf.Max(alpha, 0.0001f);
+                    pixels[y * textureWidth + offsetX + x] = new Color(rgb.r, rgb.g, rgb.b, alpha);
+                }
+            }
+            Object.DestroyImmediate(source);
         }
 
         private static void Rasterize(List<Layer> layers, Color32[] pixels, int textureWidth, int offsetX)
@@ -1365,6 +1380,181 @@ namespace Casiwar.EditorTools
                 new Layer { Polygon = Ellipse(new Vector2(0.5f, 0.80f), 0.10f, 0.16f, 0f), Color = new Color(0.98f, 0.55f, 0.12f) },
                 new Layer { Polygon = Ellipse(new Vector2(0.5f, 0.78f), 0.055f, 0.09f, 0f), Color = new Color(1f, 0.92f, 0.45f) },
             };
+        }
+
+        private static List<Layer> FlameIcon()
+        {
+            // Огонь: капля (круг снизу и острый верх), внутри — светлое ядро
+            Vector2[] outerTop = { V(0.22f, 0.40f), V(0.50f, 0.97f), V(0.78f, 0.40f) };
+            Vector2[] innerTop = { V(0.36f, 0.32f), V(0.52f, 0.70f), V(0.66f, 0.32f) };
+            return new List<Layer>
+            {
+                new Layer { Polygon = Offset(outerTop, 0.04f), Color = Outline },
+                new Layer { Polygon = Circle(new Vector2(0.5f, 0.33f), 0.31f), Color = Outline },
+                new Layer { Polygon = outerTop, Color = new Color(0.95f, 0.36f, 0.10f) },
+                new Layer { Polygon = Circle(new Vector2(0.5f, 0.33f), 0.27f), Color = new Color(0.95f, 0.36f, 0.10f) },
+                new Layer { Polygon = innerTop, Color = new Color(1f, 0.78f, 0.25f) },
+                new Layer { Polygon = Circle(new Vector2(0.51f, 0.28f), 0.16f), Color = new Color(1f, 0.78f, 0.25f) },
+                new Layer { Polygon = Circle(new Vector2(0.51f, 0.24f), 0.08f), Color = new Color(1f, 0.97f, 0.75f) },
+            };
+        }
+
+        private static List<Layer> HeartIcon()
+        {
+            var red = new Color(0.90f, 0.20f, 0.24f);
+            Vector2[] tip = { V(0.10f, 0.60f), V(0.90f, 0.60f), V(0.50f, 0.08f) };
+            return new List<Layer>
+            {
+                new Layer { Polygon = Circle(new Vector2(0.31f, 0.64f), 0.24f), Color = Outline },
+                new Layer { Polygon = Circle(new Vector2(0.69f, 0.64f), 0.24f), Color = Outline },
+                new Layer { Polygon = Offset(tip, 0.045f), Color = Outline },
+                new Layer { Polygon = Circle(new Vector2(0.31f, 0.64f), 0.20f), Color = red },
+                new Layer { Polygon = Circle(new Vector2(0.69f, 0.64f), 0.20f), Color = red },
+                new Layer { Polygon = tip, Color = red },
+                new Layer { Polygon = Circle(new Vector2(0.28f, 0.70f), 0.06f), Color = new Color(1f, 0.85f, 0.85f, 0.9f) },
+            };
+        }
+
+        private static List<Layer> PauseIcon()
+        {
+            Vector2[] left = Box(0.24f, 0.14f, 0.42f, 0.86f);
+            Vector2[] right = Box(0.58f, 0.14f, 0.76f, 0.86f);
+            return new List<Layer>
+            {
+                new Layer { Polygon = Offset(left, 0.045f), Color = Outline },
+                new Layer { Polygon = Offset(right, 0.045f), Color = Outline },
+                new Layer { Polygon = left, Color = Color.white },
+                new Layer { Polygon = right, Color = Color.white },
+            };
+        }
+
+        private static List<Layer> PlayIcon()
+        {
+            Vector2[] triangle = { V(0.24f, 0.10f), V(0.86f, 0.50f), V(0.24f, 0.90f) };
+            return new List<Layer>
+            {
+                new Layer { Polygon = Offset(triangle, 0.05f), Color = Outline },
+                new Layer { Polygon = triangle, Color = Color.white },
+            };
+        }
+
+        private static List<Layer> SpeedIcon()
+        {
+            Vector2[] first = { V(0.06f, 0.16f), V(0.50f, 0.50f), V(0.06f, 0.84f) };
+            Vector2[] second = { V(0.48f, 0.16f), V(0.94f, 0.50f), V(0.48f, 0.84f) };
+            return new List<Layer>
+            {
+                new Layer { Polygon = Offset(first, 0.045f), Color = Outline },
+                new Layer { Polygon = Offset(second, 0.045f), Color = Outline },
+                new Layer { Polygon = first, Color = Color.white },
+                new Layer { Polygon = second, Color = Color.white },
+            };
+        }
+
+        private static List<Layer> HourglassIcon()
+        {
+            // Песочные часы: рамка сверху и снизу, две колбы, песок внизу
+            var wood = new Color(0.62f, 0.42f, 0.22f);
+            var glass = new Color(0.82f, 0.90f, 0.98f);
+            var sand = new Color(0.98f, 0.78f, 0.30f);
+            Vector2[] top = { V(0.24f, 0.86f), V(0.76f, 0.86f), V(0.52f, 0.50f), V(0.48f, 0.50f) };
+            Vector2[] bottom = { V(0.48f, 0.50f), V(0.52f, 0.50f), V(0.76f, 0.14f), V(0.24f, 0.14f) };
+            return new List<Layer>
+            {
+                new Layer { Polygon = Offset(top, 0.04f), Color = Outline },
+                new Layer { Polygon = Offset(bottom, 0.04f), Color = Outline },
+                new Layer { Polygon = top, Color = glass },
+                new Layer { Polygon = bottom, Color = glass },
+                new Layer { Polygon = new[] { V(0.37f, 0.66f), V(0.63f, 0.66f), V(0.52f, 0.50f), V(0.48f, 0.50f) }, Color = sand },
+                new Layer { Polygon = new[] { V(0.33f, 0.28f), V(0.67f, 0.28f), V(0.72f, 0.16f), V(0.28f, 0.16f) }, Color = sand },
+                new Layer { Polygon = Offset(Box(0.16f, 0.84f, 0.84f, 0.94f), 0.03f), Color = Outline },
+                new Layer { Polygon = Offset(Box(0.16f, 0.06f, 0.84f, 0.16f), 0.03f), Color = Outline },
+                new Layer { Polygon = Box(0.16f, 0.84f, 0.84f, 0.94f), Color = wood },
+                new Layer { Polygon = Box(0.16f, 0.06f, 0.84f, 0.16f), Color = wood },
+            };
+        }
+
+        private static List<Layer> SkullIcon()
+        {
+            var bone = new Color(0.94f, 0.92f, 0.86f);
+            return new List<Layer>
+            {
+                new Layer { Polygon = Circle(new Vector2(0.5f, 0.58f), 0.38f), Color = Outline },
+                new Layer { Polygon = Offset(Box(0.31f, 0.10f, 0.69f, 0.36f), 0.04f), Color = Outline },
+                new Layer { Polygon = Circle(new Vector2(0.5f, 0.58f), 0.34f), Color = bone },
+                new Layer { Polygon = Box(0.31f, 0.10f, 0.69f, 0.36f), Color = bone },
+                new Layer { Polygon = Circle(new Vector2(0.36f, 0.56f), 0.10f), Color = Outline },
+                new Layer { Polygon = Circle(new Vector2(0.64f, 0.56f), 0.10f), Color = Outline },
+                new Layer { Polygon = new[] { V(0.5f, 0.44f), V(0.56f, 0.34f), V(0.44f, 0.34f) }, Color = Outline },
+                new Layer { Polygon = Box(0.40f, 0.10f, 0.43f, 0.22f), Color = Outline },
+                new Layer { Polygon = Box(0.485f, 0.10f, 0.515f, 0.22f), Color = Outline },
+                new Layer { Polygon = Box(0.57f, 0.10f, 0.60f, 0.22f), Color = Outline },
+            };
+        }
+
+        private static List<Layer> LockIcon()
+        {
+            var gold = new Color(1f, 0.78f, 0.25f);
+            var steel = new Color(0.80f, 0.83f, 0.90f);
+            Vector2[] body = Box(0.18f, 0.08f, 0.82f, 0.56f);
+            return new List<Layer>
+            {
+                new Layer { Polygon = Offset(Box(0.26f, 0.50f, 0.38f, 0.78f), 0.04f), Color = Outline },
+                new Layer { Polygon = Offset(Box(0.62f, 0.50f, 0.74f, 0.78f), 0.04f), Color = Outline },
+                new Layer { Polygon = Offset(Box(0.26f, 0.76f, 0.74f, 0.88f), 0.04f), Color = Outline },
+                new Layer { Polygon = Box(0.27f, 0.50f, 0.37f, 0.86f), Color = steel },
+                new Layer { Polygon = Box(0.63f, 0.50f, 0.73f, 0.86f), Color = steel },
+                new Layer { Polygon = Box(0.27f, 0.77f, 0.73f, 0.87f), Color = steel },
+                new Layer { Polygon = Offset(body, 0.045f), Color = Outline },
+                new Layer { Polygon = body, Color = gold },
+                new Layer { Polygon = Circle(new Vector2(0.5f, 0.36f), 0.07f), Color = Outline },
+                new Layer { Polygon = Box(0.475f, 0.18f, 0.525f, 0.34f), Color = Outline },
+            };
+        }
+
+        private static List<Layer> SpinIcon()
+        {
+            // Круговая стрелка: дуга из отрезков и наконечник
+            var layers = new List<Layer>();
+            var fills = new List<Layer>();
+            var center = new Vector2(0.5f, 0.5f);
+            const int segments = 12;
+            for (int i = 0; i < segments; i++)
+            {
+                float a0 = Mathf.Deg2Rad * (60f + i * 22f), a1 = Mathf.Deg2Rad * (60f + (i + 1) * 22f + 2f);
+                Vector2 Point(float angle, float radius) => center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+                Vector2[] piece = { Point(a0, 0.40f), Point(a1, 0.40f), Point(a1, 0.26f), Point(a0, 0.26f) };
+                layers.Add(new Layer { Polygon = Offset(piece, 0.035f), Color = Outline });
+                fills.Add(new Layer { Polygon = piece, Color = Color.white });
+            }
+            Vector2[] head = { V(0.52f, 0.97f), V(0.80f, 0.79f), V(0.52f, 0.60f) };
+            layers.Add(new Layer { Polygon = Offset(head, 0.04f), Color = Outline });
+            layers.AddRange(fills);
+            layers.Add(new Layer { Polygon = head, Color = Color.white });
+            return layers;
+        }
+
+        private static List<Layer> TowerIcon()
+        {
+            var stone = new Color(0.78f, 0.74f, 0.66f);
+            var layers = new List<Layer>
+            {
+                new Layer { Polygon = Offset(Box(0.22f, 0.06f, 0.78f, 0.74f), 0.04f), Color = Outline },
+            };
+            for (int i = 0; i < 3; i++)
+            {
+                float x = 0.22f + i * 0.22f;
+                layers.Add(new Layer { Polygon = Offset(Box(x, 0.72f, x + 0.12f, 0.90f), 0.035f), Color = Outline });
+            }
+            layers.Add(new Layer { Polygon = Box(0.22f, 0.06f, 0.78f, 0.74f), Color = stone });
+            for (int i = 0; i < 3; i++)
+            {
+                float x = 0.22f + i * 0.22f;
+                layers.Add(new Layer { Polygon = Box(x, 0.72f, x + 0.12f, 0.90f), Color = stone });
+            }
+            layers.Add(new Layer { Polygon = HalfEllipse(new Vector2(0.5f, 0.06f), 0.12f, 0.28f), Color = Outline });
+            layers.Add(new Layer { Polygon = Box(0.44f, 0.46f, 0.56f, 0.60f), Color = Outline });
+            return layers;
         }
 
         private static List<Layer> BookIcon()

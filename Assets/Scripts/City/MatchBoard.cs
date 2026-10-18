@@ -19,9 +19,8 @@ namespace Casiwar
     ///   (тоже одно действие): она падает вниз, а фишки, что стояли над ней, опускаются.
     /// • Каскады: собранные фишки лопаются, оставшиеся падают, сверху досыпаются символы из ЗАПАСА.
     ///   Запас кончился — сверху больше ничего не падает, на поле остаются пустые клетки.
-    /// • Ходы на поле не гарантируются (кроме стартового расклада), поле само не обновляется. Одним ходом сложить
-    ///   нечего — можно переставлять фишки или перемешать поле кнопкой (перемешивания дня дают постройки веры).
-    /// • День на поле окончен (событие Exhausted), когда кончились действия или линию уже не сложить никакими
+    /// • Одним ходом сложить нечего — поле само перемешивается (бесплатно, действие не тратится).
+    /// • Ход на поле окончен (событие Exhausted), когда кончились действия или линию уже не сложить никакими
     ///   перестановками (нет трёх подходящих фишек).
     ///
     /// Наследники решают, какие символы выпадают (CreateRandomTile) и что даёт собранная линия (CollectRun).
@@ -39,7 +38,7 @@ namespace Casiwar
         public TMP_Text reserveText;
         [Tooltip("Подпись кнопки «Авто»")]
         public TMP_Text autoPlayLabel;
-        [Tooltip("Кнопка «Перемешать»: доступна, когда сложить нечего и есть перемешивания")]
+        [Tooltip("Устарело: поле перемешивается само (кнопка из старых сцен прячется)")]
         public Button reshuffleButton;
         public TMP_Text reshuffleLabel;
 
@@ -72,8 +71,7 @@ namespace Casiwar
         public int Reserve { get; private set; }
         /// <summary>Сколько удачных ходов ещё можно сделать за день.</summary>
         public int ActionsLeft { get; private set; }
-        /// <summary>Сколько раз ещё можно перемешать поле сегодня.</summary>
-        public int ReshufflesLeft { get; private set; }
+        /// <summary>Сколько раз поле перемешалось само за ход (для отладки).</summary>
         public int ReshufflesUsed { get; private set; }
         public bool IsBusy => busy;
         public bool AutoPlay => autoPlay;
@@ -122,9 +120,8 @@ namespace Casiwar
         //  Управление прокрутом
         // =====================================================================
 
-        /// <summary>Начать день на поле: поле boardSize×boardSize, reserve символов в запасе,
-        /// actions удачных ходов и reshuffles перемешиваний.</summary>
-        public void BeginPhase(int boardSize, int reserve, int actions, int reshuffles)
+        /// <summary>Начать ход на поле: поле boardSize×boardSize, reserve символов в запасе и actions действий.</summary>
+        public void BeginPhase(int boardSize, int reserve, int actions)
         {
             StopAllCoroutines();
             busy = false;
@@ -136,8 +133,8 @@ namespace Casiwar
             selected = null;
             Reserve = Mathf.Max(0, reserve);
             ActionsLeft = Mathf.Max(0, actions);
-            ReshufflesLeft = Mathf.Max(0, reshuffles);
             ReshufflesUsed = 0;
+            if (reshuffleButton != null) reshuffleButton.gameObject.SetActive(false); // поле перемешивается само
 
             BuildBoard(Mathf.Max(MatchRules.MinMatch, boardSize), keepTiles: false);
             inputEnabled = true;
@@ -162,6 +159,19 @@ namespace Casiwar
             autoPlay = false;
             SetSelected(null);
             ClearHint();
+            UpdateUi();
+        }
+
+        /// <summary>
+        /// Вернуться к полю после боя в поле посреди хода: то же поле, те же действия и запас.
+        /// Каскад, прерванный боем, доигрывается.
+        /// </summary>
+        public void ResumePhase()
+        {
+            if (grid == null || views == null) return;
+            inputEnabled = true;
+            SnapViews();
+            StartCoroutine(RefillRoutine());
             UpdateUi();
         }
 
@@ -218,7 +228,7 @@ namespace Casiwar
         }
 
         /// <summary>Режим «Авто»: поле само делает лучшие ходы (с учётом приоритета).</summary>
-        public void ToggleAutoPlay()
+        public virtual void ToggleAutoPlay()
         {
             if (!inputEnabled) return;
             autoPlay = !autoPlay;
@@ -228,8 +238,8 @@ namespace Casiwar
         }
 
         /// <summary>
-        /// Сделать один лучший ход. Одним ходом сложить нечего — «Авто» тратит перемешивание, если оно есть,
-        /// иначе делает ход-подготовку (после него линия складывается следующим ходом). Не видит и такого — останавливается.
+        /// Сделать один лучший ход. Одним ходом сложить нечего — поле перемешивается, а не вышло — «Авто» делает
+        /// ход-подготовку (после него линия складывается следующим ходом). Не видит и такого — останавливается.
         /// </summary>
         public void AutoMoveOnce()
         {
@@ -244,7 +254,7 @@ namespace Casiwar
                 StartCoroutine(RefillRoutine());
                 return;
             }
-            if (ReshufflesLeft > 0 && TryReshuffleOnce()) return;
+            if (TryReshuffleOnce()) return;
             if (exhausted) return;
             if (ActionsLeft >= 2 && MatchRules.TryFindSetupMove(grid, PriorityClass, out MatchRules.Move setup))
             {
@@ -252,36 +262,24 @@ namespace Casiwar
                 return;
             }
             autoPlay = false;
-            ShowMessage("«Авто» не видит хода — переставьте фишки сами или идите в бой");
+            ShowMessage("«Авто» не видит линии — переставьте фишки сами или заканчивайте ход");
             UpdateUi();
         }
 
-        /// <summary>Кнопка «Перемешать»: только когда одним ходом сложить нечего; тратит одно перемешивание дня.</summary>
+        /// <summary>Кнопка «Перемешать» из сцен старой версии: то же, что поле делает само, когда одним ходом сложить нечего.</summary>
         public void ReshuffleOnce() => TryReshuffleOnce();
 
+        /// <summary>Перемешать поле бесплатно — только когда одной перестановкой сложить нечего.</summary>
         private bool TryReshuffleOnce()
         {
             if (!inputEnabled || busy || exhausted || grid == null) return false;
-            if (ReshufflesLeft <= 0)
-            {
-                ShowMessage("Перемешиваний нет — их даёт святилище (вера)");
-                return false;
-            }
-            if (MatchRules.HasAnyMove(grid))
-            {
-                ShowMessage("Ходы ещё есть — перемешать можно, когда одним ходом сложить нечего");
-                return false;
-            }
+            if (MatchRules.HasAnyMove(grid)) return false;
             if (!TryReshuffle())
             {
-                // Подходящего расклада не нашлось — перемешивание не тратим; переставлять фишки всё ещё можно
                 if (!MatchRules.CanEverMatch(grid)) MarkExhausted(Reserve > 0 ? "Сложить нечего" : "Символы кончились");
-                else ShowMessage("Перемешать не вышло — подготовьте линию перестановками");
                 return false;
             }
-            ReshufflesLeft--;
             ReshufflesUsed++;
-            ShowMessage($"Поле перемешано (перемешиваний осталось: {ReshufflesLeft})");
             UpdateUi();
             return true;
         }
@@ -456,7 +454,7 @@ namespace Casiwar
             }
             else if (ActionsLeft <= 0)
             {
-                MarkExhausted("Ходы на сегодня кончились");
+                MarkExhausted("Действия на этот ход кончились");
             }
             else if (!MatchRules.CanEverMatch(grid))
             {
@@ -473,9 +471,8 @@ namespace Casiwar
         }
 
         /// <summary>
-        /// Одним ходом сложить нечего: досыпать запас в пустые клетки; иначе поле само НЕ обновляется —
-        /// игрок переставляет фишки (линию можно подготовить за несколько ходов) или тратит перемешивание.
-        /// «Авто» решает само на следующем шаге (AutoMoveOnce).
+        /// Одним ходом сложить нечего: досыпать запас в пустые клетки, иначе поле перемешивается само (бесплатно).
+        /// Не вышло перемешать (фишек мало) — можно подготовить линию перестановками, пока хватает действий.
         /// </summary>
         private void HandleNoMoves()
         {
@@ -489,18 +486,14 @@ namespace Casiwar
                 MarkExhausted(Reserve > 0 ? "Сложить нечего" : "Символы кончились");
                 return;
             }
-            // Перемешать нечем, а за оставшиеся ходы линию не подготовить — день на поле окончен
-            if (ReshufflesLeft == 0 && (ActionsLeft <= 1 || (ActionsLeft == 2 && !MatchRules.TryFindSetupMove(grid, PriorityClass, out _))))
+            if (TryReshuffleOnce()) return;
+            if (exhausted) return;
+            if (ActionsLeft <= 1 || (ActionsLeft == 2 && !MatchRules.TryFindSetupMove(grid, PriorityClass, out _)))
             {
-                MarkExhausted("Не сложить за оставшиеся ходы");
+                MarkExhausted("Не сложить за оставшиеся действия");
                 return;
             }
-            if (!autoPlay)
-            {
-                ShowMessage(ReshufflesLeft > 0
-                    ? $"Одним ходом не сложить — переставьте фишки или перемешайте поле ({ReshufflesLeft})"
-                    : "Одним ходом не сложить — подготовьте линию за несколько перестановок");
-            }
+            if (!autoPlay) ShowMessage("Одной перестановкой не сложить — подготовьте линию за несколько перестановок");
             UpdateUi();
         }
 
@@ -798,11 +791,8 @@ namespace Casiwar
 
         protected void UpdateUi()
         {
-            if (reserveText != null) reserveText.text = exhausted ? ExhaustReason : $"Ходы: {ActionsLeft} · запас: {Reserve}";
+            if (reserveText != null) reserveText.text = exhausted ? ExhaustReason : $"Действия: {ActionsLeft} · запас: {Reserve}";
             if (autoPlayLabel != null) autoPlayLabel.text = autoPlay ? "Авто: ВКЛ" : "Авто: ВЫКЛ";
-            if (reshuffleLabel != null) reshuffleLabel.text = $"Перемешать ({ReshufflesLeft})";
-            if (reshuffleButton != null)
-                reshuffleButton.interactable = inputEnabled && !busy && !exhausted && ReshufflesLeft > 0 && grid != null && !MatchRules.HasAnyMove(grid);
             OnUiChanged();
         }
 

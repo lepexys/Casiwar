@@ -85,6 +85,29 @@ namespace Casiwar
 
         public bool IsLandscape { get; private set; }
 
+        /// <summary>Раскладка применена (запуск, смена ориентации): кто двигает панели сам, ставит их заново.</summary>
+        public event Action Applied;
+
+        /// <summary>Добавить место для сообщений первым (важнее остальных), пока виден его экран.</summary>
+        public void AddMessageDockFirst(Dock dock)
+        {
+            messageDocks.Insert(0, dock);
+            dockIndex = -1;
+        }
+
+        /// <summary>Поза элемента в текущей раскладке (false — элемент не записан сборщиком).</summary>
+        public bool TryGetPose(RectTransform rect, out Pose pose)
+        {
+            foreach (Entry entry in entries)
+            {
+                if (entry?.rect != rect) continue;
+                pose = IsLandscape ? entry.landscape : entry.portrait;
+                return true;
+            }
+            pose = default;
+            return false;
+        }
+
         private bool applied;
         private int dockIndex = -1;
         private int screenWidth;
@@ -150,6 +173,7 @@ namespace Casiwar
                 worldCamera.transform.position = portraitCameraPosition;
                 worldCamera.orthographicSize = portraitCameraSize;
             }
+            Applied?.Invoke();
         }
 
         /// <summary>Подобрать масштаб и сдвиг ортокамеры, чтобы арена встала в рамку arenaFrame.</summary>

@@ -7,12 +7,13 @@ namespace Casiwar
     /// <summary>Тип фишки на поле «3-в-ряд».</summary>
     public enum TileKind
     {
-        Unit,     // юнит (поле города)
+        Unit,     // юнит (поле армии)
         Resource, // ресурс: золото, производство, еда
         Item,     // снаряжение (поле трофеев)
+        Civilian, // горожанин (поле армии): не складывается ни с кем — только мешает (его можно двигать)
     }
 
-    /// <summary>Ресурсы, которые падают на поле.</summary>
+    /// <summary>Ресурсы, которые падают в сбор ресурсов в начале хода.</summary>
     public enum ResourceType
     {
         Gold,       // золото — наука в дереве технологий
@@ -39,8 +40,10 @@ namespace Casiwar
         public static TileData ForUnit(UnitData unit) => new TileData(TileKind.Unit, unit, null, default);
         public static TileData ForResource(ResourceType resource) => new TileData(TileKind.Resource, null, null, resource);
         public static TileData ForItem(ItemData item) => new TileData(TileKind.Item, null, item, default);
+        public static TileData ForCivilian() => new TileData(TileKind.Civilian, null, null, default);
 
         public bool IsUnit => Kind == TileKind.Unit;
+        public bool IsCivilian => Kind == TileKind.Civilian;
         public UnitClass Class => Unit != null ? Unit.unitClass : UnitClass.None;
         public bool IsNeutral => IsUnit && Class == UnitClass.None;
 
@@ -50,6 +53,7 @@ namespace Casiwar
             {
                 case TileKind.Unit: return Unit != null ? Unit.unitName : "?";
                 case TileKind.Item: return Item != null ? Item.itemName : "?";
+                case TileKind.Civilian: return "Горожанин";
                 default: return Resource.ToString();
             }
         }
@@ -111,7 +115,7 @@ namespace Casiwar
     /// <summary>
     /// Правила совпадений (чистый C#, без MonoBehaviour — легко тестировать).
     ///
-    ///  1. Фишки разных типов (юнит / ресурс / предмет) не складываются.
+    ///  1. Фишки разных типов (юнит / ресурс / предмет) не складываются. Горожане не складываются вообще — мешают.
     ///  2. Ресурсы — только одинаковые (еда с едой), предметы — тоже (тяжёлая броня ×3).
     ///  3. Нейтралы (UnitClass.None) — джокеры: подходят к любой линии юнитов.
     ///  4. В линии юнитов — один класс (Лучник + Нейтрал + Лучник), а когда изучен гибрид (Rules.Hybrids) —
@@ -166,6 +170,7 @@ namespace Casiwar
             public bool TryAdd(TileData tile)
             {
                 if (tile == null || tile.Kind != Kind) return false;          // пусто или разные типы
+                if (Kind == TileKind.Civilian) return false;                 // горожане в линии не складываются
                 if (Kind == TileKind.Resource) return tile.Resource == Resource; // ресурсы — только одинаковые
                 if (Kind == TileKind.Item) return tile.Item == Item;          // предметы — только одинаковые
 
@@ -325,6 +330,7 @@ namespace Casiwar
                         (y + 2 < height && grid[x, y + 1] != null && grid[x, y + 2] != null))
                         roomForLine = true;
 
+                    if (tile.IsCivilian) continue;
                     if (tile.Kind == TileKind.Resource) resources[tile.Resource] = resources.TryGetValue(tile.Resource, out int r) ? r + 1 : 1;
                     else if (tile.Kind == TileKind.Item && tile.Item != null) items[tile.Item] = items.TryGetValue(tile.Item, out int i) ? i + 1 : 1;
                     else if (tile.IsNeutral) neutrals++;
