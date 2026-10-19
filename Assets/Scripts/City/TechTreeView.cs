@@ -153,6 +153,7 @@ namespace Casiwar
                         Parents = (tech.requires ?? new string[0]).Where(id => techs.Any(t => t.id == id)).ToArray(),
                     };
                     SetIcon(node, tech);
+                    if (node.Icon == null) node.Icon = GameVisuals.GlyphSprite(node.IconText); // картинка крупнее значка-текста
                     nodes.Add(node);
                 }
             }
@@ -285,8 +286,9 @@ namespace Casiwar
             if (tech == null)
             {
                 detailsDisc.color = new Color(0.2f, 0.22f, 0.28f);
-                detailsIcon.enabled = false;
-                detailsIconText.text = GameVisuals.IconKnowledge;
+                detailsIcon.sprite = GameVisuals.GlyphSprite(GameVisuals.IconKnowledge);
+                detailsIcon.enabled = detailsIcon.sprite != null;
+                detailsIconText.text = detailsIcon.enabled ? string.Empty : GameVisuals.IconKnowledge;
                 detailsTitle.text = "Дерево науки";
                 detailsText.text = "Технологии открывают здания (строятся за ⚒ на карте) и улучшения (за 🪙 в зданиях и в «Войсках»). " +
                                    "Строка — глубина: чем ниже, тем больше нужно изучить до неё.";

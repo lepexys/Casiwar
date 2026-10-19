@@ -118,7 +118,7 @@ namespace Casiwar
             if (label != null)
             {
                 label.text = look.label ?? string.Empty;
-                label.color = GameVisuals.ContrastText(look.color);
+                label.color = look.labelColor.a > 0f ? look.labelColor : GameVisuals.ContrastText(look.color);
                 float inset = rect.rect.width * look.labelInset;
                 label.margin = new Vector4(inset, inset * 0.5f, inset, inset * 0.5f);
             }

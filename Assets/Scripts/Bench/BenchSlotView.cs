@@ -102,23 +102,30 @@ namespace Casiwar
             if (badge == null) return;
             bool show = EquippedItem.IsValid(item);
             badge.enabled = show;
-            if (!show) return;
+            if (!show)
+            {
+                // Предмета нет (боец ушёл, погиб, пришёл другой) — прячем и кружок, оставшийся от прошлого бойца
+                Image stale = Backdrop(badge, create: false);
+                if (stale != null) stale.enabled = false;
+                return;
+            }
             Sprite gear = UnitArt.Gear(item.data.unitClass, item.data.slot, item.tier);
             badge.sprite = gear != null ? gear : sprite;
             badge.color = gear != null ? Color.white : GameVisuals.TierColor(item.tier);
             badge.preserveAspect = true;
             if (gear != null) badge.rectTransform.sizeDelta = new Vector2(42f, 42f); // у рисунка мелкие детали — чуть крупнее
-            Image backdrop = Backdrop(badge);
-            backdrop.enabled = gear != null;
+            Image backdrop = Backdrop(badge, create: gear != null);
+            if (backdrop != null) backdrop.enabled = gear != null;
         }
 
-        /// <summary>Тёмный кружок под значком-рисунком: тонкий лук или посох не теряется на фигурке юнита.</summary>
-        private static Image Backdrop(Image badge)
+        /// <summary>Тёмный кружок под значком-рисунком: тонкий лук или посох не теряется на фигурке юнита. create = false — только найти.</summary>
+        private static Image Backdrop(Image badge, bool create)
         {
             Transform parent = badge.transform.parent;
             string backdropName = badge.name + "Backdrop";
             Transform existing = parent.Find(backdropName);
             if (existing != null) return existing.GetComponent<Image>();
+            if (!create) return null;
 
             var go = new GameObject(backdropName, typeof(RectTransform), typeof(Image));
             var rect = (RectTransform)go.transform;

@@ -13,6 +13,8 @@ namespace Casiwar
         public string label;
         /// <summary>Отступ подписи от краёв клетки (доля размера): узким фигурам — побольше.</summary>
         public float labelInset;
+        /// <summary>Цвет подписи; прозрачный (по умолчанию) — чёрный или белый, смотря по фону фишки.</summary>
+        public Color labelColor;
     }
 
     /// <summary>
@@ -54,7 +56,7 @@ namespace Casiwar
         public static readonly Color EnemyColor = new Color(1f, 0.32f, 0.3f);
         public static readonly Color GoldColor = new Color(1f, 0.80f, 0.22f);
         public static readonly Color AttackSymbolColor = new Color(0.90f, 0.92f, 0.97f);
-        public static readonly Color MoveSymbolColor = new Color(0.20f, 0.80f, 0.86f);
+        public static readonly Color TacticsSymbolColor = new Color(0.42f, 0.50f, 0.95f);
         public static readonly Color BlankSymbolColor = new Color(0.19f, 0.20f, 0.25f);
         public static readonly Color CivilianColor = new Color(0.90f, 0.91f, 0.93f);
 
@@ -180,6 +182,45 @@ namespace Casiwar
             }
         }
 
+        /// <summary>
+        /// Картинка для значка-символа из текста (🪙 ⚒ 🍎 📖 👤 ★ ⚔ ➜ 🚩 🕯, огонь, сердце, часы, череп, башня, спин):
+        /// там, где значок стоит один крупно (кружки деревьев), спрайт заметно крупнее текстового. null — картинки нет.
+        /// </summary>
+        public static Sprite GlyphSprite(string glyph)
+        {
+            switch (glyph)
+            {
+                case IconGold: return UnitArt.Symbol("gold");
+                case IconProduction: return UnitArt.Symbol("production");
+                case IconFood: return UnitArt.Symbol("food");
+                case IconKnowledge: return UnitArt.Symbol("knowledge");
+                case IconPopulation: return UnitArt.Symbol("population");
+                case IconStar: return UnitArt.Symbol("star");
+                case IconAttack: return UnitArt.Symbol("attack");
+                case IconMove: return UnitArt.Symbol("march");
+                case IconBanner: return UnitArt.Symbol("banner");
+                case IconCandle: return UnitArt.Symbol("candle");
+                case IconMorale: return UnitArt.Symbol("fire");
+                case IconHp: return UnitArt.Symbol("health");
+                case IconTurns: return UnitArt.Symbol("turns");
+                case IconDead: return UnitArt.Symbol("death");
+                case IconWalls: return UnitArt.Symbol("walls");
+                case IconSpin: return UnitArt.Symbol("spin");
+                default: return null;
+            }
+        }
+
+        /// <summary>Картинка ресурса для фишек (Symbols/gold, production, food); null — арта нет, тогда значок текстом.</summary>
+        public static Sprite ResourceSprite(ResourceType resource)
+        {
+            switch (resource)
+            {
+                case ResourceType.Production: return UnitArt.Symbol("production");
+                case ResourceType.Food: return UnitArt.Symbol("food");
+                default: return UnitArt.Symbol("gold");
+            }
+        }
+
         public static string ResourceName(ResourceType resource)
         {
             switch (resource)
@@ -238,7 +279,8 @@ namespace Casiwar
                 case TileKind.Resource:
                     look.color = ResourceColor(tile.Resource);
                     look.shape = Circle;
-                    look.label = ResourceIcon(tile.Resource); // иконка-спрайт TextMeshPro
+                    look.icon = ResourceSprite(tile.Resource);
+                    look.label = look.icon != null ? string.Empty : ResourceIcon(tile.Resource); // без арта — иконка-спрайт TextMeshPro
                     look.labelInset = 0.12f;
                     break;
                 case TileKind.Civilian:
@@ -273,14 +315,16 @@ namespace Casiwar
                     look.color = AttackSymbolColor;
                     look.shape = Circle;
                     look.sliced = false;
-                    look.label = IconAttack;
+                    look.icon = UnitArt.Symbol("attack");
+                    look.label = look.icon != null ? string.Empty : IconAttack;
                     look.labelInset = 0.12f;
                     break;
-                case BattleSymbol.Move:
-                    look.color = MoveSymbolColor;
+                case BattleSymbol.Tactics:
+                    look.color = TacticsSymbolColor;
                     look.shape = Circle;
                     look.sliced = false;
-                    look.label = IconMove;
+                    look.icon = UnitArt.Symbol("turns");
+                    look.label = look.icon != null ? string.Empty : IconTurns;
                     look.labelInset = 0.12f;
                     break;
                 case BattleSymbol.Blank:
@@ -289,21 +333,26 @@ namespace Casiwar
                     break;
                 case BattleSymbol.Banner:
                     look.color = BannerSymbolColor;
-                    look.label = IconBanner;
+                    look.icon = UnitArt.Symbol("banner");
+                    look.label = look.icon != null ? string.Empty : IconBanner;
                     look.labelInset = 0.1f;
                     break;
                 case BattleSymbol.Multiplier:
                     look.color = MultiplierSymbolColor;
                     look.shape = Circle;
                     look.sliced = false;
+                    look.icon = UnitArt.Symbol("multiplier");
                     look.label = $"×{multiplierValue}";
-                    look.labelInset = 0.14f;
+                    // На золотом медальоне — тёмные цифры (без арта — как обычно, по фону фишки)
+                    if (look.icon != null) look.labelColor = new Color(0.36f, 0.16f, 0.04f);
+                    look.labelInset = look.icon != null ? 0.26f : 0.14f;
                     break;
                 case BattleSymbol.Relic:
                     look.color = CandleSymbolColor;
                     look.shape = Circle;
                     look.sliced = false;
-                    look.label = IconCandle;
+                    look.icon = UnitArt.Symbol("candle");
+                    look.label = look.icon != null ? string.Empty : IconCandle;
                     look.labelInset = 0.16f;
                     break;
                 default:

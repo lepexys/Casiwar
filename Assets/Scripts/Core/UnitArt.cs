@@ -10,7 +10,9 @@ namespace Casiwar
     ///   Units/hero_* — облики богатыря (нижний ряд UnitsAssetsGemini.png), по тому, кого больше в его линии;
     ///   Icons/&lt;класс&gt; — символы на поле города и в боевом слоте;
     ///   Gear/&lt;класс&gt;_&lt;weapon|armor&gt;_&lt;1..3&gt; — снаряжение по уровням (GearAssets.png): трофеи и значки на скамейке;
-    ///   Buildings/&lt;BuildingType&gt; — здания на карте мира (HouseAssets.png).
+    ///   Buildings/&lt;BuildingType&gt; — здания на карте мира (HouseAssets.png);
+    ///   Symbols/&lt;имя&gt; — ресурсы, символы трофеев и поля боя, значки интерфейса (GeneredIcons.png);
+    ///   Map/&lt;имя&gt; — лагерь варваров, чужие города и караван на карте мира (GeneredIcons.png).
     /// Нарезает их Tools/slice_art.py.
     /// Грузится из Resources, поэтому работает без пересборки сцены. Спрайт из UnitData.sprite важнее.
     /// </summary>
@@ -84,11 +86,18 @@ namespace Casiwar
         /// <summary>Иконка класса для символа поля: копьё, меч, лук, книга, кулак, посох, бомба, корона.</summary>
         public static Sprite Icon(UnitClass unitClass) => Load("Icons/" + Key(unitClass));
 
-        /// <summary>Горожанин на поле армии (Tools/draw_map_art.py).</summary>
+        /// <summary>Горожанин на поле вербовки: крестьянин с мотыгой.</summary>
         public static Sprite Civilian() => Load("Icons/civilian");
 
-        /// <summary>Караван на карте мира: повозка с быком (Tools/draw_map_art.py).</summary>
+        /// <summary>Караван на карте мира: повозка с быком.</summary>
         public static Sprite Caravan() => Load("Map/caravan");
+
+        /// <summary>Значок: gold, production, food, knowledge, population, star, loot_weapons, loot_armor, attack, march,
+        /// banner, multiplier, candle, fire, health, turns, death, walls, spin (null — нет такого).</summary>
+        public static Sprite Symbol(string name) => Load("Symbols/" + name);
+
+        /// <summary>Объект карты мира: barbarian_camp, trade_city, hostile_city (null — нет).</summary>
+        public static Sprite MapObject(string name) => Load("Map/" + name);
 
         private static string Key(UnitClass unitClass)
         {

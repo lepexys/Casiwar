@@ -100,12 +100,9 @@ namespace Casiwar
         [Tooltip("Черты богатыря из джекпота — по стольким символам его линий (длинные первыми)")]
         [Min(3)] public int heroTraitSymbols = 7;
 
-        [Header("Анимация (темп как у ресурсного слота)")]
-        [Tooltip("Все спины хода вместе — примерно столько секунд")]
-        [Min(0.5f)] public float totalDuration = 3.2f;
-        [Tooltip("Один спин (падение + показ линий) — не быстрее и не дольше")]
-        [Min(0.05f)] public float minStep = 0.25f;
-        [Min(0.05f)] public float maxStep = 0.6f;
+        [Header("Анимация")]
+        [Tooltip("Один спин (падение + показ линий), секунд — сколько бы спинов ни было; «Пропустить» (пробел) — сразу итог")]
+        [Min(0.1f)] public float spinPace = 0.6f;
         [Min(1f)] public float dropSpeed = 16f;
         [Min(0f)] public float reelDelay = 0.9f;
         [Tooltip("Пауза после последнего спина (видно линии и кто пришёл)")]
@@ -122,7 +119,6 @@ namespace Casiwar
         private int spinsDone;
         private int soldGold;
         private bool active;
-        private bool autoSpin = true;
         private float autoSpinAt;
         private bool wasVisible;
         private bool spinAwarded = true;
@@ -145,8 +141,7 @@ namespace Casiwar
         /// <summary>Вербовка этого хода закончена (все спины сделаны).</summary>
         public bool Done => !IsSpinning && pending.Count == 0;
         /// <summary>Идёт показ (вкладка открыта, барабаны крутятся сами).</summary>
-        public bool IsPlaying => active && (IsSpinning || (pending.Count > 0 && autoSpin && IsVisible));
-        public bool AutoSpin => autoSpin;
+        public bool IsPlaying => active && (IsSpinning || (pending.Count > 0 && IsVisible));
 
         /// <summary>Все спины хода сделаны: итог «+3 бойца: …».</summary>
         public event Action<string> Finished;
@@ -174,7 +169,7 @@ namespace Casiwar
             bool visible = IsVisible;
             if (visible && !wasVisible) autoSpinAt = Time.time + autoStartDelay; // вкладку открыли — крутим чуть погодя
             wasVisible = visible;
-            if (active && visible && autoSpin && !IsSpinning && pending.Count > 0 && Time.time >= autoSpinAt) Spin();
+            if (active && visible && !IsSpinning && pending.Count > 0 && Time.time >= autoSpinAt) Spin();
         }
 
         // =====================================================================
@@ -189,7 +184,6 @@ namespace Casiwar
             IsSpinning = false;
             spinAwarded = true;
             active = true;
-            autoSpin = true;
             autoSpinAt = Time.time + autoStartDelay;
             pending.Clear();
             granted.Clear();
@@ -224,13 +218,11 @@ namespace Casiwar
             UpdateUi();
         }
 
-        /// <summary>Кнопка «Авто» (A): крутить самому или стоять.</summary>
-        public void ToggleAuto()
-        {
-            autoSpin = !autoSpin;
-            autoSpinAt = Time.time + 0.1f;
-            UpdateUi();
-        }
+        /// <summary>
+        /// Кнопка «Пропустить» (пробел): оставшиеся спины хода — сразу итог. Имя старое: кнопка «Авто» в сцене
+        /// ведёт сюда, поэтому пересобирать сцену не нужно.
+        /// </summary>
+        public void ToggleAuto() => ResolveRemaining();
 
         /// <summary>Сколько спинов даёт ход (для сводки на карте).</summary>
         public int SpinsPerTurn => PlanSpins().Count;
@@ -342,8 +334,8 @@ namespace Casiwar
             spinAwarded = false;
             UpdateUi();
 
-            // Темп как у ресурсного слота: все спины хода — около totalDuration, падение — меньше половины спина
-            float pace = Mathf.Clamp(totalDuration / Mathf.Max(1, spinsTotal), minStep, maxStep);
+            // Каждый спин — в одном темпе (много спинов — дольше, но не быстрее); падение — меньше половины спина
+            float pace = spinPace;
             float speed = Mathf.Max(dropSpeed, (Rows + (Reels - 1) * reelDelay) / Mathf.Max(0.05f, pace * 0.45f));
             for (int x = 0; x < Reels; x++)
             {
@@ -669,7 +661,13 @@ namespace Casiwar
                 logText.text = log.Count > 0 ? string.Join("\n", log) : "Клик по барабанам — сразу итог · новобранцы идут в гарнизон";
             if (board != null && board.reserveText != null)
                 board.reserveText.text = pending.Count > 0 ? $"{GameVisuals.IconSpin} спинов: {pending.Count}" : "Спины кончились";
-            if (board != null && board.autoPlayLabel != null) board.autoPlayLabel.text = autoSpin ? "Авто: ВКЛ" : "Авто: ВЫКЛ";
+            if (board != null && board.autoPlayLabel != null)
+            {
+                // Бывшая кнопка «Авто» — теперь «Пропустить»: есть что крутить — сразу итог
+                board.autoPlayLabel.text = "Пропустить";
+                Button skip = board.autoPlayLabel.GetComponentInParent<Button>();
+                if (skip != null) skip.interactable = active && !Done;
+            }
         }
 
         /// <summary>Окно вербовки в рамке прежнего поля: заголовок, подсказка про линии, барабаны 5×3 и журнал.</summary>

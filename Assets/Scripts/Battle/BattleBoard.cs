@@ -14,7 +14,7 @@ namespace Casiwar
     {
         Blank,      // пусто: складывается, но ничего не делает (когда символов мало — чтобы поле не складывалось само)
         Attack,     // ⚔ натиск: все, кто достаёт, бьют разом
-        Move,       // ➜ марш: все, кто не достаёт, идут к врагу
+        Tactics,    // ⏳ тактика: арена на несколько секунд медленнее, поле — нет (успеть собрать больше рядов)
         Warrior,    // навык воинов — «Рывок» / «Таран щитом»
         Archer,     // навык лучников — «Залп»
         Priest,     // навык жрецов — «Молитва»
@@ -40,7 +40,7 @@ namespace Casiwar
     /// Поле боя — три в ряд прямо во время боя (бой идёт сам, в реальном времени; AutoBattleManager):
     /// • меняем местами две соседние фишки (клик-клик или свайп) — только если собирается ряд 3+, иначе фишки
     ///   возвращаются. Ряд лопается, сверху падают новые; новые ряды после падения — каскад, сильнее с каждой волной;
-    /// • символы: ⚔ натиск и ➜ марш есть всегда; символы классов — только тех, кто есть в нашей армии; особые
+    /// • символы: ⚔ натиск и ⏳ тактика есть всегда; символы классов — только тех, кто есть в нашей армии; особые
     ///   (открываются в гильдиях): 🚩 Знамя и ×2 — джокеры (×2 ещё и усиливает ряд), 🕯 Свеча — 3 в ряд «Чудо»;
     /// • что делает ряд — решает AutoBattleManager (событие Matched): 3 — навык, 4 — сильнее, 5+ — суперудар;
     /// • ходов нет — поле перемешивается само. Пока бой не идёт, поле не принимает ходы.
@@ -65,7 +65,8 @@ namespace Casiwar
 
         [Header("Символы (веса)")]
         [Min(0f)] public float attackWeight = 1.4f;
-        [Min(0f)] public float moveWeight = 1f;
+        [Tooltip("Часы «Тактики» — реже натиска: замедление надо ловить, а не держать весь бой")]
+        [Min(0f)] public float tacticsWeight = 0.7f;
         [Min(0f)] public float classWeight = 1f;
         [Tooltip("Пустышки — только когда разных символов меньше minKinds (иначе поле складывается само)")]
         [Min(0f)] public float blankWeight = 0.9f;
@@ -171,7 +172,7 @@ namespace Casiwar
         {
             pool.Clear();
             pool.Add((BattleSymbol.Attack, attackWeight));
-            pool.Add((BattleSymbol.Move, moveWeight));
+            pool.Add((BattleSymbol.Tactics, tacticsWeight));
             List<UnitClass> present = classes.Distinct().ToList();
             foreach (UnitClass unitClass in present.Where(c => SymbolFor(c) != BattleSymbol.Blank).Take(maxClassSymbols))
             {

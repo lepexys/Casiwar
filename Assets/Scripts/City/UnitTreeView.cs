@@ -125,6 +125,7 @@ namespace Casiwar
                         EdgeTint = UnitClasses.IsHybrid(nodeClass) || nodeClass == UnitClass.Hero ? GameVisuals.ClassColor(nodeClass) : (Color?)null,
                     };
                     SetIcon(node, upgrade, nodeClass);
+                    if (node.Icon == null) node.Icon = GameVisuals.GlyphSprite(node.IconText); // картинка крупнее значка-текста
                     nodes.Add(node);
                 }
             }
@@ -303,8 +304,9 @@ namespace Casiwar
             if (node == null)
             {
                 detailsDisc.color = new Color(0.2f, 0.22f, 0.28f);
-                detailsIcon.enabled = false;
-                detailsIconText.text = GameVisuals.IconStar;
+                detailsIcon.sprite = GameVisuals.GlyphSprite(GameVisuals.IconStar);
+                detailsIcon.enabled = detailsIcon.sprite != null;
+                detailsIconText.text = detailsIcon.enabled ? string.Empty : GameVisuals.IconStar;
                 detailsTitle.text = "Дерево войск";
                 detailsText.text = "Каждая гильдия — своя ветка: два пути сходятся в ключ (щиты, арбалеты, посохи), вершина ветки даёт суперудар уже с 4 в ряд. " +
                                    "Гибриды растут из двух веток сразу. Улучшения работают, пока цела гильдия.";

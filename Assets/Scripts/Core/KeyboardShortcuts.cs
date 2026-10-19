@@ -12,7 +12,7 @@ namespace Casiwar
     /// <summary>
     /// Горячие клавиши (ПК):
     /// • 1–4 — вкладки «Город», «Наука», «Поле», «Войска»; Enter — «Конец хода» / «В БОЙ!»;
-    /// • на поле: A — «Авто» вербовки, Q / W / E — чего в следующий ход больше упадёт в сбор (🪙 / ⚒ / 🍎);
+    /// • на поле: Пробел — «Пропустить» (оставшиеся спины вербовки — сразу итог), Q / W / E — чего в следующий ход больше упадёт в сбор (🪙 / ⚒ / 🍎);
     /// • на трофеях: Enter (или D) — сразу итог / «Дальше», Пробел — «Крутить», A — «Авто»;
     /// • в бою клавиш нет: бой идёт сам (только кнопка скорости).
     /// Кнопки находятся по их обработчикам (подходят и сцены старой версии); в углу каждой — маленькая подпись клавиши.
@@ -43,8 +43,8 @@ namespace Casiwar
             Bind(buttons, typeof(GameManager), nameof(GameManager.ShowUnitsTab), "4", KeyCode.Alpha4, KeyCode.Keypad4);
             Bind(buttons, typeof(GameManager), nameof(GameManager.StartBattle), "Enter", KeyCode.Return, KeyCode.KeypadEnter);
             Bind(buttons, typeof(GameManager), nameof(GameManager.EndTurn), "Enter", KeyCode.Return, KeyCode.KeypadEnter);
-            Bind(buttons, typeof(MatchBoard), nameof(MatchBoard.ToggleAutoPlay), "A", KeyCode.A);
-            Bind(buttons, typeof(RecruitSlot), nameof(RecruitSlot.ToggleAuto), "A", KeyCode.A);
+            Bind(buttons, typeof(MatchBoard), nameof(MatchBoard.ToggleAutoPlay), "Пробел", KeyCode.Space); // старые сцены: та же кнопка
+            Bind(buttons, typeof(RecruitSlot), nameof(RecruitSlot.ToggleAuto), "Пробел", KeyCode.Space); // «Пропустить» вербовку
             Bind(buttons, typeof(MatchBoard), nameof(MatchBoard.ReshuffleOnce), "S", KeyCode.S);
             Bind(buttons, typeof(LootSlotMachine), nameof(LootSlotMachine.Spin), "Пробел", KeyCode.Space);
             Bind(buttons, typeof(LootSlotMachine), nameof(LootSlotMachine.ToggleAutoSpin), "A", KeyCode.A);

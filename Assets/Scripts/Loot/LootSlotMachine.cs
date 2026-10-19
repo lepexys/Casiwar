@@ -470,9 +470,13 @@ namespace Casiwar
                 case LootSymbol.Gold:
                     return GameVisuals.LookFor(TileData.ForResource(ResourceType.Gold));
                 case LootSymbol.Weapon:
-                    return new SymbolLook { color = WeaponColor, shape = GameVisuals.RoundedRect, sliced = true, icon = GameVisuals.Sword, label = string.Empty };
+                    Sprite weapons = UnitArt.Symbol("loot_weapons");
+                    return new SymbolLook { color = WeaponColor, shape = GameVisuals.RoundedRect, sliced = true,
+                        icon = weapons != null ? weapons : GameVisuals.Sword, label = string.Empty };
                 default:
-                    return new SymbolLook { color = ArmorColor, shape = GameVisuals.RoundedRect, sliced = true, icon = GameVisuals.Shield, label = string.Empty };
+                    Sprite armor = UnitArt.Symbol("loot_armor");
+                    return new SymbolLook { color = ArmorColor, shape = GameVisuals.RoundedRect, sliced = true,
+                        icon = armor != null ? armor : GameVisuals.Shield, label = string.Empty };
             }
         }
 

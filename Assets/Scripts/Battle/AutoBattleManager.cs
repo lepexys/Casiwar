@@ -41,6 +41,29 @@ namespace Casiwar
     }
 
     /// <summary>
+    /// Итоги боя для настройки темпа: сколько он длился (по часам поля и по времени арены), сколько рядов собрал
+    /// игрок и чей урон — от рядов поля или от бойцов самих (AutoBattleManager.Stats).
+    /// </summary>
+    public sealed class BattleStats
+    {
+        /// <summary>Обычные часы (что видит игрок), без пауз до и после боя.</summary>
+        public float BoardSeconds;
+        /// <summary>Время арены: медленнее при темпе меньше 1 и под «Тактикой».</summary>
+        public float ArenaSeconds;
+        /// <summary>Сколько секунд действовала «Тактика».</summary>
+        public float SlowSeconds;
+        /// <summary>Рядов игрока (и волн каскада).</summary>
+        public int Matches;
+        public int Supers;
+        /// <summary>Урон наших от рядов поля: натиск, навыки, суперудары.</summary>
+        public float BoardDamage;
+        /// <summary>Урон наших сам по себе: удары по таймеру, навыки «сами», горение и раны.</summary>
+        public float SelfDamage;
+        /// <summary>Урон врага по нашим.</summary>
+        public float EnemyDamage;
+    }
+
+    /// <summary>
     /// Бой на клетках с отрядом, который пришёл к городу или встретился в поле. Арена — сетка columns×rows
     /// (центр = этот объект), юниты стоят в клетках, ходят из клетки в клетку и бьют тех, до кого достают.
     /// Игрок внизу, враг вверху.
@@ -48,7 +71,8 @@ namespace Casiwar
     /// Бой идёт В РЕАЛЬНОМ ВРЕМЕНИ: каждый боец сам идёт к ближайшему врагу (шаг — moveInterval) и бьёт, когда достаёт
     /// (удар — attackInterval; жрецы лечат раненых). А мы собираем три в ряд на поле боя (BattleBoard), и бойцы делают
     /// то, что собрано:
-    ///   ⚔ натиск — все, кто достаёт, бьют разом; кто не достаёт — шаг к врагу;  ➜ марш — все идут к врагу;
+    ///   ⚔ натиск — все, кто достаёт, бьют разом; кто не достаёт — шаг к врагу;
+    ///   ⏳ тактика — арена на несколько секунд медленнее (tacticsSlow), а поле — нет: успеть собрать больше рядов;
     ///   символ класса — его массовый навык (3 в ряд — ×1, 4 — ×1.5, 5 — ×2); 5+ в ряд — СУПЕРУДАР класса, если он открыт
     ///   приказом гильдии («Боевой клич», «Пли!», «Молебен»; гибридам — приказом любой родительской гильдии) и класс не
     ///   перезаряжается (superCooldownSeconds, «Выдержка» — быстрее): воины — «Землетрясение», лучники — «Огненный
@@ -58,6 +82,9 @@ namespace Casiwar
     ///   а с enemySuperDay — ещё и суперудар раз в enemySuperInterval.
     /// Вожак: богатырь в слоте вожака даёт всем бойцам своей линейки +ХП и +атаку (HeroTraits.LeadHp/LeadAttack);
     ///   вождь варваров так же ведёт своих. Богатырь своего символа не имеет — бьёт вместе с любым навыком своей стороны.
+    /// Два времени: часы поля (обычные, ×кнопка скорости) — поле три в ряд, лимит боя и перезарядка наших суперударов;
+    ///   время арены = часы поля × arenaTempo (× tacticsSlow под «Тактикой») — шаги, удары, навыки и суперудары врага,
+    ///   оглушения и горение. Арена медленнее поля — у игрока есть время собирать ряды и смотреть на бой.
     /// Победа — когда у противника не осталось юнитов; время вышло (battleDuration) — решает доля оставшегося ХП.
     /// Если бой проигран, уцелевшие враги грабят город (BattleOutcome.RaidHits → CityManager.ApplyRaid).
     /// Погибшие юниты игрока не возвращаются, выжившие растут в уровнях (BattleOutcome.PlayerUnits).
@@ -121,6 +148,23 @@ namespace Casiwar
         [Min(0.1f)] public float moveInterval = 1.05f;
         [Tooltip("Оглушение «на ход» длится столько секунд")]
         [Min(0.1f)] public float stunSecondsPerTurn = 1.6f;
+        [Tooltip("Темп арены: бойцы, враг и все их таймеры (1 — как раньше). Поле три в ряд, лимит боя и перезарядка " +
+                 "наших суперударов идут по обычным часам — чем медленнее арена, тем больше рядов успевает игрок")]
+        [Range(0.2f, 1f)] public float arenaTempo = 0.55f;
+        [Tooltip("ХП всех бойцов на арене (обе стороны) × это, лечение — тоже: бой длиннее, а размен сторон тот же. " +
+                 "На скамейке ХП показывается без множителя")]
+        [Min(1f)] public float hpMultiplier = 3f;
+
+        [Header("⏳ Тактика (ряд часов на поле боя)")]
+        [Tooltip("Пока действует «Тактика», арена идёт во столько раз медленнее (поле — как обычно)")]
+        [Range(0.1f, 1f)] public float tacticsSlow = 0.5f;
+        [Tooltip("Секунд «Тактики» за ряд из трёх; за каждый символ сверх трёх — ещё tacticsSecondsPerExtra")]
+        [Min(0.5f)] public float tacticsSeconds = 4f;
+        [Min(0f)] public float tacticsSecondsPerExtra = 2f;
+        [Tooltip("«Тактика» копится, но не дольше стольких секунд")]
+        [Min(1f)] public float tacticsMaxSeconds = 12f;
+        [Tooltip("Клетки арены под «Тактикой» подкрашиваются этим цветом")]
+        public Color tacticsTint = new Color(0.45f, 0.55f, 1f);
 
         [Header("Поле боя: что даёт ряд")]
         [Tooltip("+сила за каждый символ ряда сверх трёх (4 в ряд — ×1.5, 5 — ×2)")]
@@ -294,6 +338,17 @@ namespace Casiwar
         private Transform arenaRoot;
         private Action<BattleOutcome> onFinished;
         private float battleTime;
+        /// <summary>Часы поля (обычное время × скорость боя): лимит боя и перезарядка наших суперударов.</summary>
+        private float boardTime;
+        /// <summary>Сколько ещё секунд (по часам поля) действует «Тактика».</summary>
+        private float tacticsLeft;
+        private bool tacticsShown;
+        /// <summary>Сейчас применяется ряд с поля — его урон идёт в Stats.BoardDamage.</summary>
+        private bool boardAction;
+        private readonly List<(SpriteRenderer renderer, Color color)> arenaCells = new List<(SpriteRenderer, Color)>();
+
+        /// <summary>Итоги текущего (или последнего) боя.</summary>
+        public BattleStats Stats { get; private set; } = new BattleStats();
         /// <summary>Армии построились — бойцы ходят и бьют, поле принимает ряды.</summary>
         private bool fighting;
         private float enemySkillTimer;
@@ -352,6 +407,10 @@ namespace Casiwar
             Day = ThreatDay(turn);
             onFinished = finished;
             battleTime = 0f;
+            boardTime = 0f;
+            tacticsLeft = 0f;
+            Stats = new BattleStats();
+            SetTacticsLook(false);
             fighting = false;
             occupancy = new BattleUnit[columns, rows];
 
@@ -500,7 +559,8 @@ namespace Casiwar
             EnemyAbilities(dt);
             OffBoardSkills(dt);
             CheckForWinner();
-            if (IsRunning && battleTime >= battleDuration) FinishBattle(PlayerWinsOnTimeout(), timeout: true);
+            Stats.ArenaSeconds = battleTime;
+            if (IsRunning && boardTime >= battleDuration) FinishBattle(PlayerWinsOnTimeout(), timeout: true);
             if (IsRunning) RefreshBoardClasses();
         }
 
@@ -571,7 +631,7 @@ namespace Casiwar
         }
 
         /// <summary>
-        /// Ряд на поле боя: ⚔ — натиск, ➜ — марш, символ класса — его навык (5+ — суперудар), 🕯 — «Чудо».
+        /// Ряд на поле боя: ⚔ — натиск, ⏳ — тактика, символ класса — его навык (5+ — суперудар), 🕯 — «Чудо».
         /// Сила — длина ряда × волна каскада × ×2 в ряду.
         /// </summary>
         private void OnBoardMatched(BoardMatch match)
@@ -580,6 +640,7 @@ namespace Casiwar
             float power = MatchPower(match);
             string text = string.Empty, word = string.Empty;
             bool super = false;
+            if (match.Symbol != BattleSymbol.Blank) Stats.Matches++;
             ActionTally tally = Tallied(Team.Player, () =>
             {
             switch (match.Symbol)
@@ -589,11 +650,13 @@ namespace Casiwar
                     text = hit ? $"{GameVisuals.IconAttack} Натиск{PowerTag(power)}!" : $"{GameVisuals.IconAttack} До врага не достают — шагают к нему";
                     word = hit ? "Натиск" : "Вперёд";
                     break;
-                case BattleSymbol.Move:
-                    int cells = Mathf.Max(1, match.Length - 1);
-                    March(Team.Player, cells);
-                    text = $"{GameVisuals.IconMove} Марш на {cells}!";
-                    word = "Марш";
+                case BattleSymbol.Tactics:
+                    // Арена медленнее, поле — нет: успеть собрать больше рядов и посмотреть на бой
+                    float seconds = (tacticsSeconds + Mathf.Max(0, match.Length - 3) * tacticsSecondsPerExtra) * match.Multiplier;
+                    tacticsLeft = Mathf.Min(tacticsMaxSeconds, tacticsLeft + seconds);
+                    SetTacticsLook(true);
+                    text = $"{GameVisuals.IconTurns} Тактика: бой медленнее ещё {Mathf.CeilToInt(tacticsLeft)} с";
+                    word = "Тактика";
                     break;
                 case BattleSymbol.Relic:
                     Miracle(Team.Player, MiraclePower(Team.Player, match.Length) * (1f + (match.Wave - 1) * cascadeBonus) * match.Multiplier);
@@ -606,12 +669,15 @@ namespace Casiwar
                     text = ClassMatch(BattleBoard.ClassOf(match.Symbol), match, power, out word, out super);
                     break;
             }
-            });
+            }, fromBoard: true);
+            if (super) Stats.Supers++;
             if (text.Length == 0) return;
             if (match.Wave > 1) text = $"<color=#ffd166>каскад ×{match.Wave}</color> {text}";
             // На поле — одно слово и вспышка, подробности (урон, добитые…) — строкой под полем
-            if (board != null && board.resultText != null) board.resultText.text = $"{text}  <size=80%>{tally.Text()}</size>";
-            if (board != null) board.ShowOutcome(match.Cells, word, OutcomeColor(match.Symbol), super, tally.Empty);
+            // «Тактика» ничего не бьёт — её итог и есть замедление, без «без толку»
+            string details = match.Symbol == BattleSymbol.Tactics ? string.Empty : tally.Text();
+            if (board != null && board.resultText != null) board.resultText.text = $"{text}  <size=80%>{details}</size>";
+            if (board != null) board.ShowOutcome(match.Cells, word, OutcomeColor(match.Symbol), super, tally.Empty && match.Symbol != BattleSymbol.Tactics);
             CheckForWinner();
         }
 
@@ -668,12 +734,14 @@ namespace Casiwar
         public ActionTally Tally { get; private set; }
 
         /// <summary>Выполнить действие стороны и посчитать, что оно сделало (кто сдвинулся — по клеткам до и после).</summary>
-        private ActionTally Tallied(Team team, Action action)
+        private ActionTally Tallied(Team team, Action action, bool fromBoard = false)
         {
             Dictionary<BattleUnit, Vector2Int> cells = Alive(team).ToDictionary(u => u, u => u.Cell);
             var tally = new ActionTally(team);
             ActionTally outer = Tally;
+            bool outerBoard = boardAction;
             Tally = tally;
+            boardAction = fromBoard;
             try
             {
                 action();
@@ -681,6 +749,7 @@ namespace Casiwar
             finally
             {
                 Tally = outer;
+                boardAction = outerBoard;
             }
             tally.Moved = cells.Count(pair => !pair.Key.IsDead && pair.Key.Cell != pair.Value);
             return tally;
@@ -692,7 +761,7 @@ namespace Casiwar
             switch (symbol)
             {
                 case BattleSymbol.Attack: return new Color(1f, 0.8f, 0.45f);
-                case BattleSymbol.Move: return new Color(0.55f, 0.8f, 1f);
+                case BattleSymbol.Tactics: return new Color(0.62f, 0.7f, 1f);
                 case BattleSymbol.Relic: return new Color(1f, 0.95f, 0.7f);
                 default: return GameVisuals.ClassColor(BattleBoard.ClassOf(symbol));
             }
@@ -720,7 +789,7 @@ namespace Casiwar
             {
                 float superPower = Mathf.Min(superPowerCap,
                     (1f + (match.Length - superLength) * lengthBonus) * (1f + (match.Wave - 1) * cascadeBonus) * match.Multiplier);
-                superReadyAt[(Team.Player, unitClass)] = battleTime + SuperCooldown(Team.Player);
+                superReadyAt[(Team.Player, unitClass)] = boardTime + SuperCooldown(Team.Player);
                 SuperShow(Team.Player, unitClass);
                 TriggerSuper(Team.Player, unitClass, superPower);
                 word = SuperName(unitClass);
@@ -791,19 +860,6 @@ namespace Casiwar
             return any;
         }
 
-        /// <summary>Марш: все, кто не достаёт до врага, разом идут к нему на cells клеток (ближние первыми).</summary>
-        private void March(Team team, int cells)
-        {
-            int DistanceToEnemy(BattleUnit unit)
-            {
-                BattleUnit enemy = FindNearestEnemy(unit);
-                return enemy != null ? Distance(enemy.Cell, unit.Cell) : int.MaxValue;
-            }
-            foreach (BattleUnit unit in Alive(team).OrderBy(DistanceToEnemy).ToList())
-            {
-                if (!unit.IsStunned && unit.WantsToMove()) unit.MoveAction(cells, fast: true);
-            }
-        }
 
         /// <summary>
         /// Враг применяет навыки сам: раз в enemySkillInterval (± разброс) — навык случайного своего класса,
@@ -875,7 +931,7 @@ namespace Casiwar
 
         /// <summary>Класс стороны не перезаряжается после прошлого суперудара.</summary>
         private bool SuperReady(Team team, UnitClass unitClass) =>
-            !superReadyAt.TryGetValue((team, unitClass), out float at) || battleTime >= at;
+            !superReadyAt.TryGetValue((team, unitClass), out float at) || (team == Team.Player ? boardTime : battleTime) >= at;
 
         /// <summary>Перезарядка суперудара (наша «Выдержка» — быстрее).</summary>
         private float SuperCooldown(Team team) =>
@@ -1007,7 +1063,7 @@ namespace Casiwar
                     continue;
                 }
                 if (enemy.Source != null) outcome.EnemySurvivors.Add(enemy.Source);
-                if (!victory) outcome.RaidHits.Add(enemy.AttackDamage * raidAttackMultiplier + enemy.Hp * raidHpShare);
+                if (!victory) outcome.RaidHits.Add(enemy.AttackDamage * raidAttackMultiplier + enemy.Hp / Mathf.Max(1f, hpMultiplier) * raidHpShare);
             }
             StartCoroutine(EndRoutine(outcome));
         }
@@ -1499,6 +1555,26 @@ namespace Casiwar
             }
         }
 
+        /// <summary>«Тактика» видна: клетки арены синеют, пока она действует.</summary>
+        private void SetTacticsLook(bool on)
+        {
+            if (on == tacticsShown) return;
+            tacticsShown = on;
+            foreach ((SpriteRenderer renderer, Color color) in arenaCells)
+            {
+                if (renderer != null) renderer.color = on ? Color.Lerp(color, tacticsTint, 0.35f) : color;
+            }
+        }
+
+        /// <summary>Урон по бойцу — в итоги боя (Stats): наш от рядов поля или сам по себе, либо урон врага.</summary>
+        public void RecordDamage(BattleUnit victim, float dealt)
+        {
+            if (dealt <= 0f || victim == null) return;
+            if (victim.Team == Team.Player) Stats.EnemyDamage += dealt;
+            else if (boardAction) Stats.BoardDamage += dealt;
+            else Stats.SelfDamage += dealt;
+        }
+
         private void EnsureArena()
         {
             if (unitsRoot == null)
@@ -1511,6 +1587,8 @@ namespace Casiwar
 
             arenaRoot = new GameObject("ArenaCells").transform;
             arenaRoot.SetParent(transform, false);
+            arenaCells.Clear();
+            tacticsShown = false;
             for (int x = 0; x < columns; x++)
             {
                 for (int y = 0; y < rows; y++)
@@ -1526,13 +1604,29 @@ namespace Casiwar
                     else if (y >= rows - 3) color = Color.Lerp(color, GameVisuals.EnemyColor, 0.08f); // зона врага
                     renderer.color = color;
                     renderer.sortingOrder = -30000;
+                    arenaCells.Add((renderer, color));
                 }
             }
         }
 
         private void Update()
         {
-            if (IsRunning && fighting) TickBattle(Time.deltaTime * battleSpeed);
+            if (IsRunning && fighting)
+            {
+                // Поле, лимит боя и наши суперудары — по обычным часам; арена — с темпом и «Тактикой»
+                float boardDt = Time.deltaTime * battleSpeed;
+                boardTime += boardDt;
+                Stats.BoardSeconds = boardTime;
+                float slow = 1f;
+                if (tacticsLeft > 0f)
+                {
+                    slow = tacticsSlow;
+                    Stats.SlowSeconds += Mathf.Min(boardDt, tacticsLeft);
+                    tacticsLeft = Mathf.Max(0f, tacticsLeft - boardDt);
+                }
+                SetTacticsLook(tacticsLeft > 0f);
+                TickBattle(boardDt * arenaTempo * slow);
+            }
             if (IsRunning)
             {
                 stepTextTimer -= Time.deltaTime;
@@ -1564,7 +1658,7 @@ namespace Casiwar
                 $"{gold}3 одинаковых в ряд{end} <size=80%>(4 — ×1.5, 5 — ×2)</size>",
                 $"<size=85%>{muted}круглые — действия, квадратные — бойцы; выберите фишку — запульсируют те, с кем она сложится{end}</size>",
                 $"{GameVisuals.IconAttack} натиск: кто достаёт — бьют",
-                $"{GameVisuals.IconMove} марш к врагу",
+                $"{GameVisuals.IconTurns} тактика: бой медленнее, поле — нет",
                 string.Empty,
             };
             List<UnitClass> classes = boardClasses.Where(c => SkillEffect(c).Length > 0).OrderBy(c => (int)c).ToList();
@@ -1989,8 +2083,11 @@ namespace Casiwar
                 stepText.text = IsRunning ? "Армии строятся..." : string.Empty;
                 return;
             }
-            float left = Mathf.Max(0f, battleDuration - battleTime);
-            stepText.text = $"{GameVisuals.IconTurns}{Mathf.FloorToInt(left / 60f)}:{Mathf.FloorToInt(left % 60f):00}\n<color=#8fc1ff>Собирайте ряды!</color>";
+            float left = Mathf.Max(0f, battleDuration - boardTime);
+            string hint = tacticsLeft > 0f
+                ? $"<color=#a9b8ff>Тактика {Mathf.CeilToInt(tacticsLeft)} с</color>"
+                : "<color=#8fc1ff>Собирайте ряды!</color>";
+            stepText.text = $"{GameVisuals.IconTurns}{Mathf.FloorToInt(left / 60f)}:{Mathf.FloorToInt(left % 60f):00}\n{hint}";
         }
 
         private void UpdateSpeedLabel()

@@ -1034,7 +1034,18 @@ namespace Casiwar
             MarkerImage("Shadow", root, GameVisuals.SoftCircle, new Color(0f, 0f, 0f, 0.5f), new Vector2(3f, -cellSize * 0.28f),
                 new Vector2(cellSize * 0.9f, cellSize * 0.34f));
             Color nameColor;
-            if (power.IsCamp)
+            // Рисунок: лагерь варваров, торговый или враждебный город (нет арта — фигуры и наша ратуша)
+            Sprite art = UnitArt.MapObject(power.IsCamp ? "barbarian_camp" : power.Hostile ? "hostile_city" : "trade_city");
+            if (art == null && !power.IsCamp) art = UnitArt.Building(BuildingType.TownHall);
+            if (art != null)
+            {
+                Image image = MarkerImage("Art", root, art, power.IsPlundered(powers.Turn) ? new Color(0.6f, 0.55f, 0.5f) : Color.white,
+                    Vector2.zero, new Vector2(cellSize * 1.05f, cellSize * 1.05f));
+                image.preserveAspect = true;
+                image.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(4f, -3f);
+                nameColor = power.IsCamp ? new Color(1f, 0.55f, 0.48f) : power.Hostile ? new Color(1f, 0.5f, 0.42f) : new Color(0.5f, 0.92f, 0.95f);
+            }
+            else if (power.IsCamp)
             {
                 // Шатёр: полотно, тёмный вход и красный флаг на шесте
                 MarkerImage("Tent", root, GameVisuals.Triangle, new Color(0.62f, 0.44f, 0.26f), new Vector2(0f, -cellSize * 0.04f),
@@ -1049,19 +1060,8 @@ namespace Casiwar
             }
             else
             {
-                Sprite art = UnitArt.Building(BuildingType.TownHall);
-                if (art != null)
-                {
-                    Image image = MarkerImage("Art", root, art, power.IsPlundered(powers.Turn) ? new Color(0.6f, 0.55f, 0.5f) : Color.white,
-                        Vector2.zero, new Vector2(cellSize * 1.05f, cellSize * 1.05f));
-                    image.preserveAspect = true;
-                    image.gameObject.AddComponent<Shadow>().effectDistance = new Vector2(4f, -3f);
-                }
-                else
-                {
-                    MarkerImage("Plate", root, GameVisuals.RoundedRect, new Color(0.78f, 0.62f, 0.32f), Vector2.zero,
-                        new Vector2(cellSize * 0.8f, cellSize * 0.8f)).type = Image.Type.Sliced;
-                }
+                MarkerImage("Plate", root, GameVisuals.RoundedRect, new Color(0.78f, 0.62f, 0.32f), Vector2.zero,
+                    new Vector2(cellSize * 0.8f, cellSize * 0.8f)).type = Image.Type.Sliced;
                 nameColor = power.Hostile ? new Color(1f, 0.5f, 0.42f) : new Color(0.5f, 0.92f, 0.95f);
             }
             TMP_Text label = MarkerLabel(root, power.IsCamp ? $"«{power.Name}»" : power.Name, nameColor, new Vector2(0f, cellSize * 0.62f), 26f);

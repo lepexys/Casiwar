@@ -18,7 +18,7 @@ namespace Casiwar
     /// Юнит на клеточной арене. Создаётся AutoBattleManager-ом по данным скамейки — префаб не нужен.
     /// Бой идёт в реальном времени (Tick): готов таймер — удар по цели в радиусе (жрец лечит раненого рядом),
     /// а не достаёт — шаг к цели (жрецы — к раненым союзникам). Ряды на поле боя добавляют действия сверху:
-    ///   MoveAction   (марш ➜): шаги к цели;
+    ///   MoveAction   : шаги к цели;
     ///   AttackAction (натиск ⚔): удар сразу, не дожидаясь таймера.
     /// У юнита есть «лицо» (Facing): удар в спину сильнее. Воин со щитом (щиты изучаются) ловит удары
     /// в лицо — иногда целиком, иногда частично, иногда щит не помогает; ростовой щит прикрывает и бок.
@@ -96,7 +96,7 @@ namespace Casiwar
         private BattleUnit burnSource;
         /// <summary>Сколько секунд до следующего своего действия (удара или шага).</summary>
         private float actionTimer;
-        /// <summary>Шагов за одно перемещение (марш — больше; 0 — MoveSpeed).</summary>
+        /// <summary>Шагов за одно перемещение (рывок — больше; 0 — MoveSpeed).</summary>
         private int moveReach;
         private float chargeMultiplier = 1f; // «Рывок»: следующий удар сильнее
         private int chargeStun;              // «Таран щитом»: следующий удар оглушает на столько ходов цели
@@ -148,10 +148,12 @@ namespace Casiwar
             Cell = cell;
             Facing = facing;
 
-            MaxHp = Data.GetMaxHp(Stars, Level) * statMultiplier;
+            // На арене все живучее (AutoBattleManager.hpMultiplier) — бой длиннее, у игрока есть время на ряды
+            float arenaHp = Mathf.Max(1f, owner.hpMultiplier);
+            MaxHp = Data.GetMaxHp(Stars, Level) * statMultiplier * arenaHp;
             Hp = MaxHp;
             AttackDamage = Data.GetAttack(Stars, Level) * statMultiplier + source.ItemAttack;
-            HealPower = Data.GetHeal(Stars, Level) * healMultiplier;
+            HealPower = Data.GetHeal(Stars, Level) * healMultiplier * arenaHp; // лечение — в том же масштабе, что и ХП
             Armor = Data.armor + source.ItemArmor;
             AttackRange = Mathf.Max(1, Data.attackRange);
             MoveSpeed = Mathf.Max(1, Data.moveSpeed);
@@ -407,7 +409,7 @@ namespace Casiwar
             }
 
             float steal = IsOnFire && AttackRange <= 1 ? battle.Lifesteal : 0f; // «Внутренний огонь»
-            if (steal > 0f) Heal(damage * steal);
+            if (steal > 0f) Heal(damage * steal * Mathf.Max(1f, battle.hpMultiplier)); // ХП на арене крупнее — и вампиризм
         }
 
         /// <summary>Урон от навыка (взрыв, молния): щитом не ловится; ignoreArmor — и броня не помогает. Добивание засчитывается.</summary>
@@ -488,6 +490,7 @@ namespace Casiwar
             float dealt = Mathf.Min(amount, Hp);
             Hp -= amount;
             battle.Tally?.Hit(this, dealt, Hp <= 0f);
+            battle.RecordDamage(this, dealt);
             flashTimer = 0.1f;
             if (Hp <= 0f)
             {
@@ -817,14 +820,14 @@ namespace Casiwar
             }
         }
 
-        /// <summary>Шаг делений полоски ХП: 100, а если делений выходит больше 15 — 250, 500 или 1000.</summary>
+        /// <summary>Шаг делений полоски ХП: 100, а если делений выходит больше 15 — 250, 500, 1000 (на арене ХП крупнее — и 2500).</summary>
         private static float HpTickStep(float maxHp)
         {
-            foreach (float step in new[] { 100f, 250f, 500f })
+            foreach (float step in new[] { 100f, 250f, 500f, 1000f })
             {
                 if (maxHp / step <= 15f) return step;
             }
-            return 1000f;
+            return 2500f;
         }
 
         private TextMeshPro CreateLabel(string partName, Vector2 localPosition, float fontSize, Color color, Vector2 size)

@@ -598,4 +598,117 @@ for row, (y0, y1) in enumerate(house_rows):
         save(canvas, buildings_out, name, bottom_pivot=False)
 print("buildings", sum(len(r) for r in house_names))
 
+# ---------------------------------------------------------------- символы, значки интерфейса, объекты карты
+# GeneredIcons.png: 6×4 на нарисованной светлой «шахматке» (белый ~254 / серый ~228), подписи под рядами.
+# Ряды: ресурсы; трофеи и поле боя; бой и интерфейс; карта мира. Значки → Symbols/<имя>, карта → Map/<имя>,
+# горожанин → Icons/civilian (раньше их рисовал Tools/draw_map_art.py).
+# Фон — нейтральный, поэтому прозрачность свечения считается по насыщенности цвета: она не зависит от того,
+# белая под пикселем клетка или серая (сетка «шахматки» в картинке неровная — по ней не угадать).
+symbols_out = os.path.join(root, "Assets", "Art", "Resources", "Symbols")
+map_out = os.path.join(root, "Assets", "Art", "Resources", "Map")
+for folder in (symbols_out, map_out):
+    os.makedirs(folder, exist_ok=True)
+    write_folder_meta(folder)
+
+gen = Image.open(os.path.join(root, "Assets", "GeneredIcons.png")).convert("RGB")
+GNW, GNH = gen.size
+GP = gen.load()
+gen_cols = [(0, 260), (260, 514), (514, 758), (758, 1033), (1033, 1280), (1280, GNW)]
+gen_rows = [(0, 230), (268, 484), (520, 735), (768, 966)]  # без подписей
+gen_names = [
+    [("Symbols", "gold"), ("Symbols", "production"), ("Symbols", "food"), ("Symbols", "knowledge"), ("Symbols", "population"), ("Symbols", "star")],
+    [("Symbols", "loot_weapons"), ("Symbols", "loot_armor"), ("Symbols", "attack"), ("Symbols", "march"), ("Symbols", "banner"), ("Symbols", "multiplier")],
+    [("Symbols", "candle"), ("Symbols", "fire"), ("Symbols", "health"), ("Symbols", "turns"), ("Symbols", "death"), ("Symbols", "walls")],
+    [("Map", "barbarian_camp"), ("Map", "trade_city"), ("Map", "hostile_city"), ("Map", "caravan"), ("Icons", "civilian"), ("Symbols", "spin")],
+]
+gen_bottom = {"barbarian_camp", "trade_city", "hostile_city"}  # стоят на клетке карты, как здания
+gen_tight = {"caravan"}  # по контуру, не квадратом: метка каравана на карте — широкая
+# Белая вспышка на скрещенных мечах перекрывает их контур: вокруг центра заливка не идёт (мечи не «протекают»)
+gen_keep = {"attack": ((630, 360), 21)}
+GEN_BG = 241.0  # средний цвет «шахматки»
+
+
+def chroma(c):
+    return max(c) - min(c)
+
+
+def gen_background(c):
+    """Чистая «шахматка» (и белая вспышка — её от белой клетки не отличить)."""
+    return chroma(c) <= 10 and min(c) >= 200
+
+
+def gen_floodable(c):
+    """Что вокруг рисунка: фон, тёплое свечение и сглаженный край контура (голубая сталь клинков — нет)."""
+    if min(c) < 140:
+        return False
+    return chroma(c) <= 10 or (c[0] >= c[2] + 8 and c[0] >= c[1] - 6)
+
+
+def gen_alpha(c, glow_chroma):
+    """Свечение — прозрачность по насыщенности, цвет — сам оттенок (самый яркий канал 255); тёмный край — по яркости."""
+    lum_v = sum(c) / 3.0
+    a_glow = min(1.0, chroma(c) / glow_chroma)
+    a_dark = max(0.0, (GEN_BG - 6 - lum_v) / (GEN_BG - 6))
+    if max(a_glow, a_dark) <= 0.06:
+        return (0, 0, 0, 0)
+    if a_dark > a_glow:
+        a = a_dark
+        rgb = tuple(int(max(0, min(255, (v - (1 - a) * GEN_BG) / a))) for v in c)
+    else:
+        a = a_glow
+        low = min(c)
+        rgb = tuple(int(max(0, min(255, (v - low) / a + 255 - glow_chroma))) for v in c)
+    return rgb + (int(a * 255),)
+
+
+for row, (y0, y1) in enumerate(gen_rows):
+    for col, (x0, x1) in enumerate(gen_cols):
+        folder_name, name = gen_names[row][col]
+        cw, ch = x1 - x0, y1 - y0
+        keep = gen_keep.get(name)
+
+        def blocked(x, y):
+            return keep is not None and (x0 + x - keep[0][0]) ** 2 + (y0 + y - keep[0][1]) ** 2 <= keep[1] ** 2
+
+        outside = [[False] * ch for _ in range(cw)]
+        queue = deque((x, y) for x in range(cw) for y in (0, ch - 1))
+        queue.extend((x, y) for y in range(ch) for x in (0, cw - 1))
+        while queue:
+            x, y = queue.popleft()
+            if outside[x][y] or blocked(x, y) or not gen_floodable(GP[x0 + x, y0 + y]):
+                continue
+            outside[x][y] = True
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if 0 <= nx < cw and 0 <= ny < ch and not outside[nx][ny]:
+                    queue.append((nx, ny))
+        # Насыщенность самого яркого свечения вокруг рисунка (нет свечения — обычная)
+        glow = sorted(chroma(GP[x0 + x, y0 + y]) for x in range(cw) for y in range(ch)
+                      if outside[x][y] and sum(GP[x0 + x, y0 + y]) >= 600 and not gen_background(GP[x0 + x, y0 + y]))
+        glow_chroma = max(80.0, glow[int(len(glow) * 0.98)] if len(glow) >= 50 else 120.0)
+        out = Image.new("RGBA", (cw, ch))
+        op = out.load()
+        for x in range(cw):
+            for y in range(ch):
+                c = GP[x0 + x, y0 + y]
+                if not outside[x][y]:
+                    op[x, y] = c + (255,)
+                elif gen_background(c):
+                    op[x, y] = (0, 0, 0, 0)
+                else:
+                    op[x, y] = gen_alpha(c, glow_chroma)
+        bbox = out.split()[3].point(lambda v: 255 if v > 24 else 0).getbbox()
+        fig = out.crop(bbox)
+        side = max(fig.size) + 8
+        canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        if name in gen_tight:
+            canvas = Image.new("RGBA", (fig.size[0] + 8, fig.size[1] + 8), (0, 0, 0, 0))
+            canvas.paste(fig, (4, 4))
+        elif name in gen_bottom:
+            canvas.paste(fig, ((side - fig.size[0]) // 2, side - fig.size[1] - 4))
+        else:
+            canvas.paste(fig, ((side - fig.size[0]) // 2, (side - fig.size[1]) // 2))
+        folder = {"Symbols": symbols_out, "Map": map_out, "Icons": icons_out}[folder_name]
+        save(canvas, folder, name, bottom_pivot=False)
+print("generated icons", sum(len(r) for r in gen_names))
+
 print("ok")

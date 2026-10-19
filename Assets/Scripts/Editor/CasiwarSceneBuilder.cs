@@ -46,7 +46,7 @@ namespace Casiwar.EditorTools
         private const float LandTabHeight = 868f;
         private const float RosterHeight = 190f; // панель наших юнитов внизу экрана боя
         private const int IconSize = 128;
-        private const string IconsVersion = "casiwar-icons-v8";
+        private const string IconsVersion = "casiwar-icons-v9";
         /// <summary>Иконок в ряду атласа: атлас — сетка (полоса в одну строку шире 2048 px, и Unity её ужимает).</summary>
         private const int IconColumns = 8;
 
@@ -111,6 +111,10 @@ namespace Casiwar.EditorTools
             Build();
             return true;
         }
+
+        /// <summary>Перерисовать только атлас значков TextMeshPro (★ ⚒ 🪙 …): сцену пересобирать не нужно.</summary>
+        [MenuItem("Casiwar/Обновить значки в тексте", false, 1)]
+        public static void RefreshIcons() => EnsureIconSprites();
 
         /// <summary>Запуск без UI: Unity.exe -batchmode -quit -executeMethod Casiwar.EditorTools.CasiwarSceneBuilder.BuildFromCommandLine</summary>
         public static void BuildFromCommandLine()
@@ -337,7 +341,7 @@ namespace Casiwar.EditorTools
             AutoSize(reserveText, 16f, 34f);
             Flex(reserveText.gameObject, 1.3f);
             // «Перемешать» больше нет: поле перемешивается само, когда одним ходом сложить нечего
-            Button autoButton = NewButton("Btn_Auto", boardControls, "Авто: ВЫКЛ", AutoColor, 30f, out TextMeshProUGUI autoLabel);
+            Button autoButton = NewButton("Btn_Auto", boardControls, "Пропустить", AutoColor, 30f, out TextMeshProUGUI autoLabel); // вербовка: оставшиеся спины — сразу итог
             Flex(autoButton.gameObject, 0.9f);
 
             // --- Вкладка «Город»: карта мира 50×50 с городом (слои карты CityMapView создаёт сам; скамейка здесь скрыта) ---
@@ -1040,33 +1044,36 @@ namespace Casiwar.EditorTools
             /// <summary>…или готовая картинка (иконки классов с фишек поля) — на кружке цвета класса, как фишка.</summary>
             public string Image;
             public UnitClass Class;
+            /// <summary>Картинка без кружка-подложки (у нарисованных значков свой контур).</summary>
+            public bool Plain;
         }
 
         private const string ClassIconsFolder = "Assets/Art/Resources/Icons/";
+        private const string SymbolsFolder = "Assets/Art/Resources/Symbols/";
 
         private static readonly IconSpec[] Icons =
         {
-            new IconSpec { Name = "star", Unicode = 0x2605, Draw = StarIcon },              // ★ улучшения зданий
-            new IconSpec { Name = "production", Unicode = 0x2692, Draw = ProductionIcon },  // ⚒ очки производства
-            new IconSpec { Name = "gold", Unicode = 0x1FA99, Draw = GoldIcon },             // 🪙 золото
-            new IconSpec { Name = "attack", Unicode = 0x2694, Draw = AttackIcon },          // ⚔ атака
-            new IconSpec { Name = "move", Unicode = 0x279C, Draw = MoveIcon },              // ➜ перемещение
-            new IconSpec { Name = "food", Unicode = 0x1F34E, Draw = FoodIcon },             // 🍎 еда
-            new IconSpec { Name = "population", Unicode = 0x1F464, Draw = PopulationIcon }, // 👤 жители
-            new IconSpec { Name = "knowledge", Unicode = 0x1F4D6, Draw = BookIcon },        // 📖 очки знаний
-            new IconSpec { Name = "banner", Unicode = 0x1F6A9, Draw = FlagIcon },           // 🚩 Знамя — джокер боевого слота
-            new IconSpec { Name = "candle", Unicode = 0x1F56F, Draw = CandleIcon },         // 🕯 Свеча — 3+ в слоте: «Чудо»
+            Art("star", 0x2605, "star", StarIcon),                    // ★ улучшения зданий, звёзды бойцов
+            Art("production", 0x2692, "production", ProductionIcon),  // ⚒ очки производства
+            Art("gold", 0x1FA99, "gold", GoldIcon),                   // 🪙 золото
+            Art("attack", 0x2694, "attack", AttackIcon),              // ⚔ атака
+            Art("move", 0x279C, "march", MoveIcon),                   // ➜ перемещение
+            Art("food", 0x1F34E, "food", FoodIcon),                   // 🍎 еда
+            Art("population", 0x1F464, "population", PopulationIcon), // 👤 жители
+            Art("knowledge", 0x1F4D6, "knowledge", BookIcon),         // 📖 очки знаний
+            Art("banner", 0x1F6A9, "banner", FlagIcon),               // 🚩 Знамя — джокер поля боя
+            Art("candle", 0x1F56F, "candle", CandleIcon),             // 🕯 Свеча — 3 в ряд: «Чудо»
             // Свои значки (GameVisuals.Icon…): область частного использования — в шрифте их нет
-            new IconSpec { Name = "morale", Unicode = 0xE010, Draw = FlameIcon },
-            new IconSpec { Name = "hp", Unicode = 0xE011, Draw = HeartIcon },
+            Art("morale", 0xE010, "fire", FlameIcon),
+            Art("hp", 0xE011, "health", HeartIcon),
             new IconSpec { Name = "pause", Unicode = 0xE012, Draw = PauseIcon },
             new IconSpec { Name = "play", Unicode = 0xE013, Draw = PlayIcon },
             new IconSpec { Name = "speed", Unicode = 0xE014, Draw = SpeedIcon },
-            new IconSpec { Name = "turns", Unicode = 0xE015, Draw = HourglassIcon },
-            new IconSpec { Name = "dead", Unicode = 0xE016, Draw = SkullIcon },
+            Art("turns", 0xE015, "turns", HourglassIcon),
+            Art("dead", 0xE016, "death", SkullIcon),
             new IconSpec { Name = "hold", Unicode = 0xE017, Draw = LockIcon },
-            new IconSpec { Name = "spin", Unicode = 0xE018, Draw = SpinIcon },
-            new IconSpec { Name = "walls", Unicode = 0xE019, Draw = TowerIcon },
+            Art("spin", 0xE018, "spin", SpinIcon),
+            Art("walls", 0xE019, "walls", TowerIcon),
             // Классы — картинки с фишек поля (GameVisuals.ClassIcon)
             new IconSpec { Name = "class_warrior", Unicode = 0xE001, Image = ClassIconsFolder + "warrior.png", Class = UnitClass.Warrior },
             new IconSpec { Name = "class_archer", Unicode = 0xE002, Image = ClassIconsFolder + "archer.png", Class = UnitClass.Archer },
@@ -1077,6 +1084,15 @@ namespace Casiwar.EditorTools
             new IconSpec { Name = "class_hero", Unicode = 0xE007, Image = ClassIconsFolder + "hero.png", Class = UnitClass.Hero },
             new IconSpec { Name = "class_militia", Unicode = 0xE008, Image = ClassIconsFolder + "militia.png", Class = UnitClass.None },
         };
+
+        /// <summary>Значок из нарезанного GeneredIcons.png (Symbols/…) без подложки; нет файла — рисунок из многоугольников.</summary>
+        private static IconSpec Art(string name, uint unicode, string symbol, System.Func<List<Layer>> fallback)
+        {
+            string path = SymbolsFolder + symbol + ".png";
+            return File.Exists(path)
+                ? new IconSpec { Name = name, Unicode = unicode, Image = path, Plain = true }
+                : new IconSpec { Name = name, Unicode = unicode, Draw = fallback };
+        }
 
         /// <summary>
         /// В шрифте нет символов ★ ⚒ 🪙 ⚔ ➜ 🍎 👤, поэтому рисуем их в атлас и создаём TMP Sprite Asset,
@@ -1102,7 +1118,7 @@ namespace Casiwar.EditorTools
                 importer.spriteImportMode = SpriteImportMode.Single;
                 importer.npotScale = TextureImporterNPOTScale.None;
                 importer.alphaIsTransparency = true;
-                importer.mipmapEnabled = false;
+                importer.mipmapEnabled = true; // нарисованные значки в мелком тексте — без «лесенки»
                 importer.textureCompression = TextureImporterCompression.Uncompressed;
                 importer.maxTextureSize = 4096; // иначе большой атлас ужмётся, и прямоугольники значков съедут
                 importer.userData = IconsVersion; // при изменении рисунков поднимите версию — атлас перерисуется
@@ -1173,7 +1189,7 @@ namespace Casiwar.EditorTools
             {
                 // Клетка i: столбец i % IconColumns, строка i / IconColumns (снизу вверх — как GlyphRect у TMP)
                 int offset = i / IconColumns * IconSize * texture.width + i % IconColumns * IconSize;
-                if (Icons[i].Image != null) BlitImage(Icons[i].Image, pixels, texture.width, offset, GameVisuals.IconBackground(Icons[i].Class));
+                if (Icons[i].Image != null) BlitImage(Icons[i].Image, pixels, texture.width, offset, GameVisuals.IconBackground(Icons[i].Class), Icons[i].Plain);
                 else Rasterize(Icons[i].Draw(), pixels, texture.width, offset);
             }
             texture.SetPixels32(pixels);
@@ -1183,9 +1199,9 @@ namespace Casiwar.EditorTools
 
         /// <summary>
         /// Картинку с диска — в клетку атласа, с сохранением пропорций, поверх кружка цвета background
-        /// (в тексте тонкий меч или книга без подложки теряются). Нет файла — клетка пустая.
+        /// (в тексте тонкий меч или книга без подложки теряются); plain — без кружка и крупнее. Нет файла — клетка пустая.
         /// </summary>
-        private static void BlitImage(string path, Color32[] pixels, int textureWidth, int offsetX, Color background)
+        private static void BlitImage(string path, Color32[] pixels, int textureWidth, int offsetX, Color background, bool plain = false)
         {
             if (!File.Exists(path)) return;
             var source = new Texture2D(2, 2, TextureFormat.RGBA32, false);
@@ -1194,7 +1210,7 @@ namespace Casiwar.EditorTools
                 Object.DestroyImmediate(source);
                 return;
             }
-            float fit = IconSize * 0.80f / Mathf.Max(source.width, source.height);
+            float fit = IconSize * (plain ? 0.94f : 0.80f) / Mathf.Max(source.width, source.height);
             float width = source.width * fit, height = source.height * fit;
             float left = (IconSize - width) * 0.5f, bottom = (IconSize - height) * 0.5f;
             for (int y = 0; y < IconSize; y++)
@@ -1206,7 +1222,7 @@ namespace Casiwar.EditorTools
                     float outer = Mathf.Clamp01(IconSize * 0.49f - distance);
                     float inner = Mathf.Clamp01(IconSize * 0.45f - distance);
                     Color baseColor = Color.Lerp(new Color(Outline.r, Outline.g, Outline.b, outer), new Color(background.r, background.g, background.b, 1f), inner);
-                    baseColor.a = outer;
+                    baseColor.a = plain ? 0f : outer;
                     float u = (x + 0.5f - left) / width, v = (y + 0.5f - bottom) / height;
                     Color art = u < 0f || v < 0f || u > 1f || v > 1f ? new Color(0f, 0f, 0f, 0f) : source.GetPixelBilinear(u, v);
                     float alpha = art.a + baseColor.a * (1f - art.a);
